@@ -66,8 +66,10 @@ void EncoderHandler::processSwitch() {
 
   _stableSwitchState = reading;
 
-  if (_stableSwitchState == LOW) {
-    Serial.println("Encoder switch ditekan");
+  // Callback dijalankan saat dilepas agar controller dapat membedakan
+  // klik biasa dengan gerakan tekan-putar.
+  if (_stableSwitchState == HIGH) {
+    Serial.println("Encoder switch diklik");
 
     if (_pressCallback != nullptr) {
       _pressCallback();

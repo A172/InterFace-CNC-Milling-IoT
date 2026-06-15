@@ -1,12 +1,14 @@
 #include "ButtonHandler.h"
 
-ButtonHandler::ButtonHandler(int b1, int b2, int b3, int b4, int b5, int b6) {
+ButtonHandler::ButtonHandler(int b1, int b2, int b3, int b4, int b5, int b6, int b7, int b8) {
   _pins[0] = b1;
   _pins[1] = b2;
   _pins[2] = b3;
   _pins[3] = b4;
   _pins[4] = b5;
   _pins[5] = b6;
+  _pins[6] = b7;
+  _pins[7] = b8;
 
   for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
     _lastReading[i] = HIGH;
@@ -50,14 +52,14 @@ void ButtonHandler::processButton(uint8_t index) {
   _stableState[index] = reading;
 
   if (_stableState[index] == LOW) {
-    uint8_t buttonNumber = index + 1;
+    uint8_t pinNumber = _pins[index];
 
-    Serial.print("Button ");
-    Serial.print(buttonNumber);
+    Serial.print("Button pin ");
+    Serial.print(pinNumber);
     Serial.println(" ditekan");
 
     if (_callback != nullptr) {
-      _callback(buttonNumber);
+      _callback(pinNumber);
     }
   }
 }

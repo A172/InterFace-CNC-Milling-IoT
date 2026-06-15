@@ -73,7 +73,7 @@ void CloudMqtt::update() {
   connect();
 }
 
-bool CloudMqtt::isConnected() const {
+bool CloudMqtt::isConnected() {
   return _mqttClient.connected();
 }
 

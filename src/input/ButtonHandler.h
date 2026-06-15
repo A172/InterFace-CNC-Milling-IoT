@@ -7,14 +7,14 @@ typedef void (*ButtonEventCallback)(uint8_t buttonNumber);
 
 class ButtonHandler {
   public:
-    ButtonHandler(int b1, int b2, int b3, int b4, int b5, int b6);
+    ButtonHandler(int b1, int b2, int b3, int b4, int b5, int b6, int b7, int b8);
 
     void begin();
     void update();   // dipanggil di loop()
     void setCallback(ButtonEventCallback callback);
 
   private:
-    static constexpr uint8_t BUTTON_COUNT = 6;
+    static constexpr uint8_t BUTTON_COUNT = 8;
     static constexpr unsigned long DEBOUNCE_MS = 35;
 
     uint8_t _pins[BUTTON_COUNT];

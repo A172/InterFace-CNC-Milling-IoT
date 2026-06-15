@@ -1,50 +1,69 @@
 #include <Arduino.h>
 #include "app/AppController.h"
-#include "config/PinConfig.h"
-#include "input/ButtonHandler.h"
-#include "input/EncoderHandler.h"
+
+// ============================================================
+// KONFIGURASI FITUR FIRMWARE
+// ============================================================
+// Cara pakai:
+// - Hilangkan tanda // untuk mengaktifkan fitur.
+// - Tambahkan tanda // untuk menonaktifkan fitur.
+//
+// Contoh:
+// #define CNC_ENABLE_NETWORK    -> WiFi/IoT aktif
+// // #define CNC_ENABLE_NETWORK -> WiFi/IoT nonaktif
+
+// Aktifkan pembacaan push button dan rotary encoder.
+#define CNC_ENABLE_INPUT
+
+// Aktifkan modul SD card.
+#define CNC_ENABLE_SD_CARD
+
+// Aktifkan hanya saat SD card memang sedang diuji. Tes ini menulis file.
+// #define CNC_RUN_SD_CARD_DIAGNOSTICS
+
+
+
+// Aktifkan koneksi WiFi dan MQTT IoT.
+// #define CNC_ENABLE_NETWORK
+
 
 AppController app;
 
-ButtonHandler buttons(
-  PinConfig::BTN1,
-  PinConfig::BTN2,
-  PinConfig::BTN3,
-  PinConfig::BTN4,
-  PinConfig::BTN5,
-  PinConfig::BTN6
-);
-
-EncoderHandler encoder(
-  PinConfig::ENCODER_CLK,
-  PinConfig::ENCODER_DT,
-  PinConfig::ENCODER_SW
-);
-
-void handleButtonPressed(uint8_t buttonNumber) {
-  app.onButtonPressed(buttonNumber);
-}
-
-void handleEncoderTurned(int8_t direction) {
-  app.onEncoderTurned(direction);
-}
-
-void handleEncoderPressed() {
-  app.onEncoderPressed();
-}
-
 void setup() {
-  Serial.begin(115200);
-  buttons.begin();
-  buttons.setCallback(handleButtonPressed);
-  encoder.begin();
-  encoder.setTurnCallback(handleEncoderTurned);
-  encoder.setPressCallback(handleEncoderPressed);
-  app.begin();
+  app.beginSerial();
+  app.beginDisplay();
+
+#if defined(CNC_ENABLE_INPUT)
+  app.beginInput();
+#else
+  Serial.println("Input tombol dan encoder nonatifkan");
+#endif
+
+#if defined(CNC_ENABLE_SD_CARD)
+  app.beginStorage();
+
+  #if defined(CNC_RUN_SD_CARD_DIAGNOSTICS)
+    app.runSdCardDiagnostics();
+  #endif
+
+  // Contoh memilih file G-code dari SD card.
+  // Uncomment jika ingin menguji pemilihan file job.
+  // app.selectSdCardJobFile("/contoh.nc");
+  // app.printSelectedJobFile();
+
+  // USB flashdisk diagnostics/selection removed
+#else
+  Serial.println("Storage (SD/USB) nonaktifkan");
+#endif
+
+
+#if defined(CNC_ENABLE_NETWORK)
+  app.beginNetwork();
+#else
+  Serial.println("Network nonaktifkan");
+#endif
 }
 
 void loop() {
-  buttons.update();
-  encoder.update();
   app.update();
 }

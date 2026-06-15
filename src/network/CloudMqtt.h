@@ -9,7 +9,7 @@ class CloudMqtt {
   public:
     bool begin();
     void update();
-    bool isConnected() const;
+    bool isConnected();
 
     void publishStatus(const String &state, const String &detail);
     void publishButtonEvent(uint8_t buttonNumber);
