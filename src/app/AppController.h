@@ -32,7 +32,7 @@ class AppController {
 
     // Tahap inisialisasi yang bisa dipanggil dari main.cpp.
     void beginSerial();
-    void beginDisplay();
+    void beginDisplay(bool holdBootScreen = false);
     void beginInput();
     void beginStorage();
     void beginNetwork();
@@ -44,7 +44,7 @@ class AppController {
   bool selectSdCardJobFile(const char *path);
     void printSelectedJobFile();
   // Internal helper to finalize selection from file list (shows messages)
-  void selectFileFromList();
+  bool selectFileFromList();
 
     // Fungsi update yang bisa dipanggil dari main.cpp.
     void updateInput();
@@ -104,6 +104,7 @@ class AppController {
   };
   PendingAction _pendingAction = PendingAction::None;
   UiState _confirmReturnState = UiState::Menu;
+  UiState _infoReturnState = UiState::Menu;
   String _confirmTitle;
   String _confirmMessage;
 
@@ -122,11 +123,22 @@ class AppController {
   void showStandbyScreen();
   void showMainMenuScreen(size_t selected = 0);
   void showSubMenu(const char *title, const std::vector<String> &items);
-  void showInfoScreen(const char *title, const char *message);
+  void showCurrentFileListPage();
+  void showInfoScreen(
+    const char *title,
+    const char *message,
+    UiState returnState = UiState::Menu
+  );
+  void dismissInfoScreen();
   void showActionConfirm(PendingAction action, const char *title, const char *message);
   void redrawActionConfirm();
   void cancelActionConfirm();
   void executeConfirmedAction();
+  bool isConfirmationState() const;
+  void acceptConfirmation();
+  void rejectConfirmation();
+  void executeSelectedConfirmation();
+  void redrawCurrentConfirmation();
 
     // Modul jaringan dan cloud.
     WifiPortal _wifi;
@@ -165,7 +177,7 @@ class AppController {
     uint32_t _lastJogRepeatTick = 0;
 
     void enterSetOrigin();
-    void confirmSetOrigin();
+    void confirmSetOrigin(UiState returnState);
     void handleJog(uint8_t pin, float distance);
     void updateJogDisplay();
 };

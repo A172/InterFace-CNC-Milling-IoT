@@ -10,7 +10,7 @@ namespace Symbols {
     // 1. Konversi gambar hitam-putih ke format XBM/U8g2.
     // 2. Ganti isi LOGO_BITMAP di Symbols.cpp.
     // 3. Ubah USE_CUSTOM_LOGO menjadi true.
-    constexpr bool USE_CUSTOM_LOGO = false;
+    constexpr bool USE_CUSTOM_LOGO = true;
     constexpr uint8_t WIDTH = 40;
     constexpr uint8_t HEIGHT = 40;
 

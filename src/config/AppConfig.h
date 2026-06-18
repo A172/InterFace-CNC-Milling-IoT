@@ -15,8 +15,8 @@ namespace AppConfig {
   constexpr unsigned long SERIAL_BAUD_RATE = 115200;
 
   // ========== LCD BOOT SCREEN ==========
-  constexpr const char *BOOT_TITLE = "CNC MILLING";
-  constexpr const char *BOOT_SUBTITLE = "IoT Interface";
+  constexpr const char *BOOT_TITLE = "AYB Interface";
+  constexpr const char *BOOT_SUBTITLE = "Version 1.0";
   constexpr const char *BOOT_FOOTER = "Initializing";
   constexpr unsigned int BOOT_SPLASH_MS = 2500;
 

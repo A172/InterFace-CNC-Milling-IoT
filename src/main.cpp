@@ -21,6 +21,9 @@
 // Aktifkan hanya saat SD card memang sedang diuji. Tes ini menulis file.
 // #define CNC_RUN_SD_CARD_DIAGNOSTICS
 
+// Tampilkan boot screen saja untuk pengujian LCD.
+// #define CNC_BOOT_SCREEN_ONLY
+
 
 
 // Aktifkan koneksi WiFi dan MQTT IoT.
@@ -31,7 +34,14 @@ AppController app;
 
 void setup() {
   app.beginSerial();
+
+#if defined(CNC_BOOT_SCREEN_ONLY)
+  app.beginDisplay(true);
+  Serial.println("Boot screen only mode aktif");
+  return;
+#else
   app.beginDisplay();
+#endif
 
 #if defined(CNC_ENABLE_INPUT)
   app.beginInput();

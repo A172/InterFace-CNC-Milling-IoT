@@ -126,9 +126,27 @@ void AppController::showSubMenu(const char *title, const std::vector<String> &it
   _menu.showMenu(title, items, 0);
 }
 
-void AppController::showInfoScreen(const char *title, const char *message) {
+void AppController::showInfoScreen(
+  const char *title,
+  const char *message,
+  UiState returnState
+) {
+  _infoReturnState = returnState;
   _uiState = UiState::Info;
   _lcd.showMessage(title, message);
+}
+
+void AppController::dismissInfoScreen() {
+  _uiState = _infoReturnState;
+
+  if (_uiState == UiState::Standby) {
+    showStandbyScreen();
+  } else if (_uiState == UiState::SetOrigin) {
+    updateJogDisplay();
+  } else {
+    _uiState = UiState::Menu;
+    _menu.redraw();
+  }
 }
 
 void AppController::showActionConfirm(
@@ -186,6 +204,57 @@ void AppController::executeConfirmedAction() {
   }
 
   cancelActionConfirm();
+}
+
+bool AppController::isConfirmationState() const {
+  return _uiState == UiState::ConfirmAction ||
+         _uiState == UiState::ConfirmSelect;
+}
+
+void AppController::acceptConfirmation() {
+  if (_uiState == UiState::ConfirmAction) {
+    executeConfirmedAction();
+    return;
+  }
+
+  if (_uiState == UiState::ConfirmSelect) {
+    selectFileFromList();
+    showStandbyScreen();
+  }
+}
+
+void AppController::rejectConfirmation() {
+  if (_uiState == UiState::ConfirmAction) {
+    cancelActionConfirm();
+    return;
+  }
+
+  if (_uiState == UiState::ConfirmSelect) {
+    _uiState = UiState::FileList;
+    const size_t pageSize = 5;
+    size_t end = min(_fileListOffset + pageSize, _fileList.size());
+    std::vector<String> page;
+    for (size_t i = _fileListOffset; i < end; ++i) {
+      page.push_back(_fileList[i]);
+    }
+    _lcd.showMenu("Files", page, _fileListSelected - _fileListOffset, 0);
+  }
+}
+
+void AppController::executeSelectedConfirmation() {
+  if (_confirmSelectedIndex == 0) {
+    acceptConfirmation();
+  } else {
+    rejectConfirmation();
+  }
+}
+
+void AppController::redrawCurrentConfirmation() {
+  if (_uiState == UiState::ConfirmAction) {
+    redrawActionConfirm();
+  } else if (_uiState == UiState::ConfirmSelect) {
+    _lcd.showConfirm("Confirm", "Set as job?", _confirmSelectedIndex);
+  }
 }
 
 
@@ -251,7 +320,11 @@ void AppController::update() {
   // Logika Long Press Jogging
   if (_activeJogPin != 0 && _uiState == UiState::SetOrigin) {
     if (digitalRead(_activeJogPin) == HIGH) {
-      // Tombol dilepas
+      // Tekan singkat baru dijalankan saat tombol dilepas. Dengan cara ini,
+      // long-press tidak didahului oleh gerakan 1 mm.
+      if (!_jogLongPressHandled) {
+        handleJog(_activeJogPin, AppConfig::JOG_STEP_SHORT_MM);
+      }
       _activeJogPin = 0;
     } else {
       uint32_t pressDuration = millis() - _jogStartTime;
@@ -343,8 +416,7 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
   if (_uiState == UiState::Info) {
     if (buttonNumber == (uint8_t)PinConfig::BTN7 ||
         buttonNumber == (uint8_t)PinConfig::BTN8) {
-      _uiState = UiState::Menu;
-      _menu.redraw();
+      dismissInfoScreen();
     }
     return;
   }
@@ -395,56 +467,20 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
     return;
   }
 
-  if (_uiState == UiState::ConfirmAction) {
+  if (isConfirmationState()) {
     if (buttonNumber == (uint8_t)PinConfig::BTN7) {
-      if (_confirmSelectedIndex == 0) {
-        executeConfirmedAction();
-      } else {
-        cancelActionConfirm();
-      }
+      // Tombol ENTER fisik selalu berarti Yes.
+      acceptConfirmation();
       return;
     }
 
     if (buttonNumber == (uint8_t)PinConfig::BTN8) {
-      cancelActionConfirm();
+      // Tombol BACK fisik selalu berarti No.
+      rejectConfirmation();
       return;
     }
 
     return;
-  }
-
-  // Jika sedang pada dialog konfirmasi
-  if (_uiState == UiState::ConfirmSelect) {
-    // ENTER -> pilih Yes/No
-    if (buttonNumber == (uint8_t)PinConfig::BTN7) {
-      if (_confirmSelectedIndex == 0) {
-        // Yes: perform selection
-        selectFileFromList();
-        showStandbyScreen();
-      } else {
-        // No: return to file list view
-        _uiState = UiState::FileList;
-        const size_t pageSize = 5;
-        size_t end = _fileListOffset + pageSize;
-        if (end > _fileList.size()) end = _fileList.size();
-        std::vector<String> page;
-        for (size_t i = _fileListOffset; i < end; ++i) page.push_back(_fileList[i]);
-        _lcd.showMenu("Files", page, _fileListSelected - _fileListOffset, 0);
-      }
-      return;
-    }
-
-    // BACK -> cancel and return to file list
-    if (buttonNumber == (uint8_t)PinConfig::BTN8) {
-      _uiState = UiState::FileList;
-      const size_t pageSize = 5;
-      size_t end = _fileListOffset + pageSize;
-      if (end > _fileList.size()) end = _fileList.size();
-      std::vector<String> page;
-      for (size_t i = _fileListOffset; i < end; ++i) page.push_back(_fileList[i]);
-      _lcd.showMenu("Files", page, _fileListSelected - _fileListOffset, 0);
-      return;
-    }
   }
 
   if (_uiState == UiState::SetOrigin) {
@@ -452,7 +488,7 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
       showActionConfirm(
         PendingAction::SetOrigin,
         "CONFIRM ORIGIN",
-        "Set posisi jadi nol?"
+        "Set posisi Origin?"
       );
       return;
     }
@@ -474,7 +510,6 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
       _jogStartTime = millis();
       _jogLongPressHandled = false;
       _lastJogRepeatTick = 0;
-      handleJog(buttonNumber, AppConfig::JOG_STEP_SHORT_MM);
     }
 
     updateJogDisplay();
@@ -589,9 +624,14 @@ void AppController::processSelectAction() {
     return;
   }
 
+  // Klik rotary mengikuti pilihan Yes/No yang sedang disorot.
+  if (isConfirmationState()) {
+    executeSelectedConfirmation();
+    return;
+  }
+
   if (_uiState == UiState::Info) {
-    _uiState = UiState::Menu;
-    _menu.redraw();
+    dismissInfoScreen();
     return;
   }
 
@@ -797,17 +837,9 @@ void AppController::onEncoderTurned(int8_t direction) {
     return;
   }
 
-  if (_uiState == UiState::ConfirmAction) {
+  if (isConfirmationState()) {
     _confirmSelectedIndex = (_confirmSelectedIndex == 0) ? 1 : 0;
-    redrawActionConfirm();
-    return;
-  }
-
-  // Jika sedang pada dialog konfirmasi, ubah pilihan Yes/No
-  if (_uiState == UiState::ConfirmSelect) {
-    // Toggle between 0 and 1
-    _confirmSelectedIndex = (_confirmSelectedIndex == 0) ? 1 : 0;
-    _lcd.showConfirm("Confirm", "Set as job?", _confirmSelectedIndex);
+    redrawCurrentConfirmation();
     return;
   }
 
@@ -960,7 +992,7 @@ void AppController::beginSerial() {
   Serial.println("AppController: Serial1 initialized for BTT");
 }
 
-void AppController::beginDisplay() {
+void AppController::beginDisplay(bool holdBootScreen) {
   Serial.println("AppController: beginDisplay()");
   _lcd.begin();
   Serial.println("AppController: LcdHandler.begin() returned");
@@ -971,6 +1003,11 @@ void AppController::beginDisplay() {
     AppConfig::BOOT_SPLASH_MS
   );
   Serial.println("AppController: showBootSplash() called");
+
+  if (holdBootScreen) {
+    _uiState = UiState::Boot;
+    return;
+  }
 
   showStandbyScreen();
 }
