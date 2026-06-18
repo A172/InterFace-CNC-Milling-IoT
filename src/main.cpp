@@ -61,9 +61,8 @@ void setup() {
   // app.selectSdCardJobFile("/contoh.nc");
   // app.printSelectedJobFile();
 
-  // USB flashdisk diagnostics/selection removed
 #else
-  Serial.println("Storage (SD/USB) nonaktifkan");
+  Serial.println("Storage SD nonaktifkan");
 #endif
 
 

@@ -1,5 +1,6 @@
 #include "AppController.h"
 #include <SD.h>
+#include <math.h>
 #include <time.h>
 #include <WiFi.h>
 
@@ -37,11 +38,180 @@ namespace {
     return normalized;
   }
 
+  String normalizeSdDirectory(const String &path) {
+    String normalized = path.length() ? path : "/";
+    normalized.replace("//", "/");
+
+    if (!normalized.startsWith("/")) {
+      normalized = "/" + normalized;
+    }
+
+    if (normalized.length() > 1 && normalized.endsWith("/")) {
+      normalized.remove(normalized.length() - 1);
+    }
+
+    return normalized;
+  }
+
+  String parentSdDirectory(const String &path) {
+    String normalized = normalizeSdDirectory(path);
+    if (normalized == "/") {
+      return "/";
+    }
+
+    int slashIndex = normalized.lastIndexOf('/');
+    if (slashIndex <= 0) {
+      return "/";
+    }
+
+    return normalized.substring(0, slashIndex);
+  }
+
+  bool isSupportedJobFile(const String &path) {
+    String lower = path;
+    lower.toLowerCase();
+    return lower.endsWith(".gcode") ||
+           lower.endsWith(".gco") ||
+           lower.endsWith(".gc") ||
+           lower.endsWith(".nc") ||
+           lower.endsWith(".tap");
+  }
+
+  bool isIgnoredSdBrowserEntry(const String &name) {
+    String lower = name;
+    lower.trim();
+    lower.toLowerCase();
+
+    if (lower == "..") {
+      return false;
+    }
+
+    return lower.length() == 0 ||
+           lower.startsWith(".") ||
+           lower.startsWith("._") ||
+           lower == "system volume information" ||
+           lower == "$recycle.bin" ||
+           lower == "recycler" ||
+           lower == "found.000" ||
+           lower == "indexervolumeguid" ||
+           lower == "wp settings.dat" ||
+           lower == "desktop.ini";
+  }
+
+  String fileListTitle(const String &volumeLabel, const String &directory) {
+    String title = volumeLabel.length() ? volumeLabel : "SD";
+
+    if (directory == "/") {
+      return title + ":/";
+    }
+
+    return title + ":" + directory;
+  }
+
+  unsigned int clampUnsigned(int value, unsigned int minValue, unsigned int maxValue) {
+    if (value < (int)minValue) {
+      return minValue;
+    }
+
+    if (value > (int)maxValue) {
+      return maxValue;
+    }
+
+    return (unsigned int)value;
+  }
+
+  unsigned int clampFeedrate(int value, unsigned int maxValue) {
+    return clampUnsigned(value, AppConfig::MACHINE_FEEDRATE_MIN_MM_S, maxValue);
+  }
+
+  bool parseAxisValue(const String &line, char axis, float &value) {
+    String axisToken;
+    axisToken += axis;
+    axisToken += ':';
+
+    int axisIndex = line.indexOf(axisToken);
+    int valueStart = axisIndex >= 0 ? axisIndex + axisToken.length() : -1;
+    if (axisIndex < 0) {
+      axisIndex = line.indexOf(axis);
+      valueStart = axisIndex + 1;
+    }
+
+    if (axisIndex < 0 || axisIndex + 1 >= (int)line.length()) {
+      return false;
+    }
+
+    while (valueStart < (int)line.length() && line[valueStart] == ' ') {
+      valueStart++;
+    }
+
+    int valueEnd = valueStart;
+    while (valueEnd < (int)line.length()) {
+      char c = line[valueEnd];
+      if (!isDigit(c) && c != '.' && c != '-') {
+        break;
+      }
+      valueEnd++;
+    }
+
+    if (valueEnd == valueStart) {
+      return false;
+    }
+
+    value = line.substring(valueStart, valueEnd).toFloat();
+    return true;
+  }
+
+  bool parseGeometryAxisValue(const String &line, const char *section, const char *bound, char axis, float &value) {
+    int sectionIndex = line.indexOf(section);
+    if (sectionIndex < 0) {
+      return false;
+    }
+
+    int boundIndex = line.indexOf(bound, sectionIndex);
+    if (boundIndex < 0) {
+      return false;
+    }
+
+    int objectEnd = line.indexOf('}', boundIndex);
+    if (objectEnd < 0) {
+      return false;
+    }
+
+    String object = line.substring(boundIndex, objectEnd);
+    return parseAxisValue(object, axis, value);
+  }
+
+  String feedrateItem(const char *label, unsigned int value, bool loaded, bool editing) {
+    String item(label);
+    item += editing ? ":*" : ": ";
+    if (!loaded) {
+      item += "?";
+      return item;
+    }
+
+    item += value;
+    item += "mm/s";
+    return item;
+  }
+
+  String millimeterItem(const char *label, unsigned int value, bool loaded, bool editing) {
+    String item(label);
+    item += editing ? ":*" : ": ";
+    if (!loaded) {
+      item += "?";
+      return item;
+    }
+
+    item += value;
+    item += "mm";
+    return item;
+  }
+
   std::vector<String> mainMenuItems() {
     return {
       "Move & Jog",
       "Select Job",
-      "Machine Control",
+      "Machine Ctrl & Stat",
       "Network",
       "Settings"
     };
@@ -97,9 +267,10 @@ void AppController::showStandbyScreen() {
   _uiState = UiState::Standby;
 
   String jobName = computeJobName();
+  String standbyJobName = jobName.length() ? "Job: " + jobName : String();
   String eta = computeEta();
   String time = getLocalTimeString();
-  const char *jobNamePtr = jobName.length() ? jobName.c_str() : nullptr;
+  const char *jobNamePtr = standbyJobName.length() ? standbyJobName.c_str() : nullptr;
   const char *etaPtr = eta.length() ? eta.c_str() : nullptr;
   const char *timePtr = time.length() ? time.c_str() : nullptr;
 
@@ -126,23 +297,350 @@ void AppController::showSubMenu(const char *title, const std::vector<String> &it
   _menu.showMenu(title, items, 0);
 }
 
+std::vector<String> AppController::machineStatusItems() const {
+  return {
+    String("Spindle: ") + (_spindleOn ? "ON" : "OFF"),
+    feedrateItem("Feed XY", _machineFeedrateXY, _machineFeedrateLoaded, _machineFeedrateEditing && _machineStatusSelected == 1),
+    feedrateItem("Feed Z", _machineFeedrateZ, _machineFeedrateLoaded, _machineFeedrateEditing && _machineStatusSelected == 2),
+    millimeterItem("Area X", _machineWorkAreaX, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == 3),
+    millimeterItem("Area Y", _machineWorkAreaY, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == 4),
+    millimeterItem("Area Z", _machineWorkAreaZ, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == 5),
+    String("Home X: ") + _homeXStatus,
+    String("Home Y: ") + _homeYStatus,
+    String("Home Z: ") + _homeZStatus
+  };
+}
+
+void AppController::showMachineStatusScreen() {
+  _uiState = UiState::MachineStatus;
+
+  std::vector<String> items = machineStatusItems();
+  if (_machineStatusSelected >= items.size()) {
+    _machineStatusSelected = items.empty() ? 0 : items.size() - 1;
+  }
+
+  const size_t pageSize = 5;
+  if (_machineStatusSelected >= _machineStatusOffset + pageSize) {
+    _machineStatusOffset = _machineStatusSelected - pageSize + 1;
+  } else if (_machineStatusSelected < _machineStatusOffset) {
+    _machineStatusOffset = _machineStatusSelected;
+  }
+
+  _lcd.showMenu(
+    "MACHINE CTRL & STATUS",
+    items,
+    _machineStatusSelected,
+    _machineStatusOffset
+  );
+}
+
+void AppController::handleMachineStatusSelect() {
+  if (_machineStatusSelected == 0) {
+    if (toggleSpindle()) {
+      showMachineStatusScreen();
+    }
+    return;
+  }
+
+  if (_machineStatusSelected == 1 || _machineStatusSelected == 2) {
+    if (!_machineFeedrateLoaded) {
+      requestMachineFeedrateStatus(true);
+      showMachineStatusScreen();
+      return;
+    }
+
+    if (_machineFeedrateEditing) {
+      _machineFeedrateEditing = false;
+      if (!applyMachineFeedrate()) {
+        return;
+      }
+    } else {
+      _machineFeedrateEditing = true;
+    }
+
+    showMachineStatusScreen();
+    return;
+  }
+
+  if (_machineStatusSelected >= 3 && _machineStatusSelected <= 5) {
+    if (!_machineWorkAreaLoaded) {
+      requestMachineGeometryStatus(true);
+      showMachineStatusScreen();
+      return;
+    }
+
+    _machineWorkAreaEditing = !_machineWorkAreaEditing;
+    showMachineStatusScreen();
+    return;
+  }
+
+  requestHomeSensorStatus(true);
+  showMachineStatusScreen();
+}
+
+bool AppController::toggleSpindle() {
+  const bool nextState = !_spindleOn;
+
+  if (AppConfig::ENABLE_SPINDLE_CONTROL) {
+    Serial1.println(nextState ? "M3" : "M5");
+    _spindleOn = nextState;
+    return true;
+  }
+
+  showInfoScreen(
+    "SPINDLE",
+    "Kontrol nonaktif",
+    UiState::MachineStatus,
+    AppConfig::CONFIRM_RESULT_MESSAGE_MS
+  );
+  return false;
+}
+
+bool AppController::applyMachineFeedrate() {
+  if (!AppConfig::ENABLE_MACHINE_FEEDRATE_CONTROL) {
+    showInfoScreen(
+      "FEEDRATE",
+      "Kontrol nonaktif",
+      UiState::MachineStatus,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return false;
+  }
+
+  Serial1.print("M203 X");
+  Serial1.print(_machineFeedrateXY);
+  Serial1.print(" Y");
+  Serial1.print(_machineFeedrateXY);
+  Serial1.print(" Z");
+  Serial1.println(_machineFeedrateZ);
+  requestMachineFeedrateStatus(true);
+  return true;
+}
+
+void AppController::requestMachineFeedrateStatus(bool force) {
+  if (!force && millis() - _lastM203Request < AppConfig::MACHINE_STATUS_POLL_MS) {
+    return;
+  }
+
+  Serial1.println("M203");
+  _lastM203Request = millis();
+}
+
+void AppController::parseMachineFeedrateStatus(const String &line) {
+  if (line.indexOf("M203") == -1) {
+    return;
+  }
+
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  if (!parseAxisValue(line, 'X', x) ||
+      !parseAxisValue(line, 'Y', y) ||
+      !parseAxisValue(line, 'Z', z)) {
+    return;
+  }
+
+  _machineFeedrateXY = (unsigned int)((x + y) / 2.0f + 0.5f);
+  _machineFeedrateZ = (unsigned int)(z + 0.5f);
+  _machineFeedrateLoaded = true;
+
+  if (_uiState == UiState::MachineStatus) {
+    showMachineStatusScreen();
+  }
+}
+
+void AppController::requestMachineGeometryStatus(bool force) {
+  if (!force && millis() - _lastM115Request < AppConfig::MACHINE_STATUS_POLL_MS) {
+    return;
+  }
+
+  Serial1.println("M115");
+  _lastM115Request = millis();
+}
+
+void AppController::parseMachineGeometryStatus(const String &line) {
+  if (line.indexOf("area:{") == -1 || line.indexOf("full:{") == -1) {
+    return;
+  }
+
+  float minX = 0.0f;
+  float minY = 0.0f;
+  float minZ = 0.0f;
+  float maxX = 0.0f;
+  float maxY = 0.0f;
+  float maxZ = 0.0f;
+
+  if (!parseGeometryAxisValue(line, "full:{", "min:{", 'x', minX) ||
+      !parseGeometryAxisValue(line, "full:{", "min:{", 'y', minY) ||
+      !parseGeometryAxisValue(line, "full:{", "min:{", 'z', minZ) ||
+      !parseGeometryAxisValue(line, "full:{", "max:{", 'x', maxX) ||
+      !parseGeometryAxisValue(line, "full:{", "max:{", 'y', maxY) ||
+      !parseGeometryAxisValue(line, "full:{", "max:{", 'z', maxZ)) {
+    return;
+  }
+
+  _machineWorkAreaX = (unsigned int)(fabs(maxX - minX) + 0.5f);
+  _machineWorkAreaY = (unsigned int)(fabs(maxY - minY) + 0.5f);
+  _machineWorkAreaZ = (unsigned int)(fabs(maxZ - minZ) + 0.5f);
+  _machineWorkAreaLoaded = true;
+
+  if (_uiState == UiState::MachineStatus) {
+    showMachineStatusScreen();
+  }
+}
+
+void AppController::requestHomeSensorStatus(bool force) {
+  if (!force && millis() - _lastM119Request < AppConfig::MACHINE_STATUS_POLL_MS) {
+    return;
+  }
+
+  Serial1.println("M119");
+  _lastM119Request = millis();
+}
+
+void AppController::parseHomeSensorStatus(const String &line) {
+  String lower = line;
+  lower.toLowerCase();
+
+  bool hasState = lower.indexOf("triggered") != -1 || lower.indexOf("open") != -1;
+  if (!hasState) {
+    return;
+  }
+
+  String status = (lower.indexOf("triggered") != -1) ? "TRIG" : "OPEN";
+  bool changed = false;
+
+  if (lower.startsWith("x_min:") || lower.startsWith("x_max:")) {
+    changed = _homeXStatus != status;
+    _homeXStatus = status;
+  } else if (lower.startsWith("y_min:") || lower.startsWith("y_max:")) {
+    changed = _homeYStatus != status;
+    _homeYStatus = status;
+  } else if (lower.startsWith("z_min:") || lower.startsWith("z_max:")) {
+    changed = _homeZStatus != status;
+    _homeZStatus = status;
+  }
+
+  if (changed && _uiState == UiState::MachineStatus) {
+    showMachineStatusScreen();
+  }
+}
+
+bool AppController::loadSdFileList(const String &directory) {
+  _currentSdDirectory = normalizeSdDirectory(directory);
+  _fileList.clear();
+  _fileListPaths.clear();
+  _fileListIsDirectory.clear();
+  _fileListSelected = 0;
+  _fileListOffset = 0;
+
+  if (!_sdCard.isReady()) {
+    showInfoScreen("SD CARD", "Belum siap");
+    return false;
+  }
+
+  std::vector<SdCardEntry> entries = _sdCard.listEntries(_currentSdDirectory.c_str(), 50, true);
+  for (const SdCardEntry &entry : entries) {
+    if (isIgnoredSdBrowserEntry(entry.name)) {
+      continue;
+    }
+
+    if (entry.isDirectory) {
+      String label = entry.name == ".." ? ".." : "[" + entry.name + "]";
+      _fileList.push_back(label);
+      _fileListPaths.push_back(entry.path);
+      _fileListIsDirectory.push_back(true);
+      continue;
+    }
+
+    if (!isSupportedJobFile(entry.path)) {
+      continue;
+    }
+
+    _fileList.push_back(entry.name);
+    _fileListPaths.push_back(entry.path);
+    _fileListIsDirectory.push_back(false);
+  }
+
+  return true;
+}
+
+void AppController::openSdFileList(const String &directory) {
+  if (!loadSdFileList(directory)) {
+    return;
+  }
+
+  showCurrentFileListPage();
+}
+
+void AppController::showCurrentFileListPage() {
+  _uiState = UiState::FileList;
+
+  if (_fileList.empty()) {
+    _lcd.showMessage(fileListTitle(_sdCard.volumeLabel(), _currentSdDirectory).c_str(), "Tidak ada file");
+    return;
+  }
+
+  const size_t pageSize = 5;
+  if (_fileListSelected >= _fileList.size()) {
+    _fileListSelected = _fileList.size() - 1;
+  }
+
+  _fileListOffset = (_fileListSelected / pageSize) * pageSize;
+  size_t end = min(_fileListOffset + pageSize, _fileList.size());
+  std::vector<String> page;
+  for (size_t i = _fileListOffset; i < end; ++i) {
+    page.push_back(_fileList[i]);
+  }
+
+  String title = fileListTitle(_sdCard.volumeLabel(), _currentSdDirectory);
+  _lcd.showMenu(title.c_str(), page, _fileListSelected - _fileListOffset, 0);
+}
+
+void AppController::enterSelectedFileListItem() {
+  if (_fileList.empty() || _fileListSelected >= _fileListPaths.size()) {
+    _lcd.showMessage("Files", "Tidak ada file");
+    return;
+  }
+
+  if (_fileListSelected < _fileListIsDirectory.size() &&
+      _fileListIsDirectory[_fileListSelected]) {
+    openSdFileList(_fileListPaths[_fileListSelected]);
+    return;
+  }
+
+  _confirmSelectedIndex = 0;
+  _confirmTitle = "PILIH JOB";
+  _confirmMessage = basenameForLcd(_fileListPaths[_fileListSelected]);
+  _uiState = UiState::ConfirmSelect;
+  _lcd.showConfirm(_confirmTitle.c_str(), _confirmMessage.c_str(), _confirmSelectedIndex);
+}
+
 void AppController::showInfoScreen(
   const char *title,
   const char *message,
-  UiState returnState
+  UiState returnState,
+  unsigned long autoCloseMs
 ) {
   _infoReturnState = returnState;
+  _infoShownAt = millis();
+  _infoAutoCloseMs = autoCloseMs;
   _uiState = UiState::Info;
   _lcd.showMessage(title, message);
 }
 
 void AppController::dismissInfoScreen() {
+  _infoAutoCloseMs = 0;
   _uiState = _infoReturnState;
 
   if (_uiState == UiState::Standby) {
     showStandbyScreen();
   } else if (_uiState == UiState::SetOrigin) {
     updateJogDisplay();
+  } else if (_uiState == UiState::FileList) {
+    showCurrentFileListPage();
+  } else if (_uiState == UiState::MachineStatus) {
+    showMachineStatusScreen();
   } else {
     _uiState = UiState::Menu;
     _menu.redraw();
@@ -179,6 +677,10 @@ void AppController::cancelActionConfirm() {
 
   if (cancelledAction == PendingAction::SetOrigin) {
     updateJogDisplay();
+  } else if (_uiState == UiState::Standby) {
+    showStandbyScreen();
+  } else if (_uiState == UiState::FileList) {
+    showCurrentFileListPage();
   } else {
     _menu.redraw();
   }
@@ -186,24 +688,71 @@ void AppController::cancelActionConfirm() {
 
 void AppController::executeConfirmedAction() {
   PendingAction action = _pendingAction;
+  UiState returnState = _confirmReturnState;
   _pendingAction = PendingAction::None;
 
   if (action == PendingAction::HomeAll) {
     if (AppConfig::ENABLE_HOME_CONTROL) {
       Serial1.println("G28");
-      showInfoScreen("HOME ALL", "G28 dikirim");
+      showInfoScreen(
+        "HOME ALL",
+        "G28 dikirim",
+        returnState,
+        AppConfig::CONFIRM_RESULT_MESSAGE_MS
+      );
     } else {
-      showInfoScreen("UI PREVIEW", "G28 belum dikirim");
+      showInfoScreen(
+        "UI PREVIEW",
+        "G28 belum dikirim",
+        returnState,
+        AppConfig::CONFIRM_RESULT_MESSAGE_MS
+      );
     }
     return;
   }
 
   if (action == PendingAction::SetOrigin) {
-    confirmSetOrigin();
+    confirmSetOrigin(UiState::Menu);
+    return;
+  }
+
+  if (action == PendingAction::RepeatJob) {
+    repeatSelectedJob(UiState::Standby);
     return;
   }
 
   cancelActionConfirm();
+}
+
+void AppController::repeatSelectedJob(UiState returnState) {
+  if (_selectedJobSource != JobSource::SdCard || !_sdCard.hasSelectedJobFile()) {
+    showInfoScreen(
+      "REPEAT JOB",
+      "Tidak ada file",
+      returnState,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return;
+  }
+
+  if (AppConfig::ENABLE_JOB_REPEAT_RETURN) {
+    Serial1.println("M400");
+    Serial1.println("G90");
+    Serial1.print("G0 Z");
+    Serial1.print(AppConfig::JOB_REPEAT_SAFE_Z_MM, 2);
+    Serial1.print(" F");
+    Serial1.println(AppConfig::JOB_TRAVEL_FEED_MM_MIN);
+    Serial1.print("G0 X0 Y0 F");
+    Serial1.println(AppConfig::JOB_TRAVEL_FEED_MM_MIN);
+  }
+
+  // Tahap berikutnya: panggil G-code sender untuk streaming file yang sama dari awal.
+  showInfoScreen(
+    "REPEAT JOB",
+    AppConfig::ENABLE_JOB_REPEAT_RETURN ? "Kembali ke origin" : "Repeat disiapkan",
+    returnState,
+    AppConfig::CONFIRM_RESULT_MESSAGE_MS
+  );
 }
 
 bool AppController::isConfirmationState() const {
@@ -219,7 +768,6 @@ void AppController::acceptConfirmation() {
 
   if (_uiState == UiState::ConfirmSelect) {
     selectFileFromList();
-    showStandbyScreen();
   }
 }
 
@@ -230,14 +778,7 @@ void AppController::rejectConfirmation() {
   }
 
   if (_uiState == UiState::ConfirmSelect) {
-    _uiState = UiState::FileList;
-    const size_t pageSize = 5;
-    size_t end = min(_fileListOffset + pageSize, _fileList.size());
-    std::vector<String> page;
-    for (size_t i = _fileListOffset; i < end; ++i) {
-      page.push_back(_fileList[i]);
-    }
-    _lcd.showMenu("Files", page, _fileListSelected - _fileListOffset, 0);
+    showCurrentFileListPage();
   }
 }
 
@@ -253,7 +794,7 @@ void AppController::redrawCurrentConfirmation() {
   if (_uiState == UiState::ConfirmAction) {
     redrawActionConfirm();
   } else if (_uiState == UiState::ConfirmSelect) {
-    _lcd.showConfirm("Confirm", "Set as job?", _confirmSelectedIndex);
+    _lcd.showConfirm(_confirmTitle.c_str(), _confirmMessage.c_str(), _confirmSelectedIndex);
   }
 }
 
@@ -274,10 +815,29 @@ void AppController::begin() {
   }
 }
 
+void AppController::notifyJobFinished() {
+  if (_selectedJobSource != JobSource::SdCard || !_sdCard.hasSelectedJobFile()) {
+    showInfoScreen(
+      "JOB SELESAI",
+      "Tidak ada file",
+      UiState::Standby,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return;
+  }
+
+  _uiState = UiState::Standby;
+  showActionConfirm(
+    PendingAction::RepeatJob,
+    "JOB SELESAI",
+    "Ulangi job ini?"
+  );
+}
+
 
 String AppController::computeJobName() const {
   if (_selectedJobSource == JobSource::SdCard && _sdCard.hasSelectedJobFile()) {
-    return _sdCard.selectedJobFile();
+    return basenameForLcd(_sdCard.selectedJobFile());
   }
   return String();
 }
@@ -285,7 +845,7 @@ String AppController::computeJobName() const {
 String AppController::computeEta() const {
   // Placeholder: Nantinya dihitung berdasarkan sisa baris G-code / kecepatan
   if (_selectedJobSource == JobSource::SdCard && _sdCard.hasSelectedJobFile()) {
-    return String("--:--");
+    return String("00:00:00");
   }
   return String();
 }
@@ -313,6 +873,12 @@ String AppController::getLocalTimeString() const {
 void AppController::update() {
   if (_inputStarted) {
     updateInput();
+  }
+
+  if (_uiState == UiState::Info &&
+      _infoAutoCloseMs > 0 &&
+      millis() - _infoShownAt >= _infoAutoCloseMs) {
+    dismissInfoScreen();
   }
 
   updateMarlinCommunication();
@@ -355,8 +921,9 @@ void AppController::updateMarlinCommunication() {
   bool setOriginControlActive =
     _uiState == UiState::SetOrigin &&
     AppConfig::ENABLE_SET_ORIGIN_CONTROL;
+  bool machineStatusActive = _uiState == UiState::MachineStatus;
 
-  if (AppConfig::UI_DEVELOPMENT_MODE && !setOriginControlActive) {
+  if (AppConfig::UI_DEVELOPMENT_MODE && !setOriginControlActive && !machineStatusActive) {
     return;
   }
 
@@ -376,9 +943,23 @@ void AppController::updateMarlinCommunication() {
       _lastM114Request = millis();
     }
   }
+
+  if (_uiState == UiState::MachineStatus) {
+    if (!_machineFeedrateLoaded) {
+      requestMachineFeedrateStatus();
+    }
+    if (!_machineWorkAreaLoaded) {
+      requestMachineGeometryStatus();
+    }
+    requestHomeSensorStatus();
+  }
 }
 
 void AppController::parseMarlinResponse(const String &line) {
+  parseMachineFeedrateStatus(line);
+  parseMachineGeometryStatus(line);
+  parseHomeSensorStatus(line);
+
   // Format standar Marlin M114: "X:0.00 Y:0.00 Z:0.00 E:0.00 Count X:0 Y:0 Z:0"
   if (line.indexOf("X:") != -1 && line.indexOf("Y:") != -1 && line.indexOf("Z:") != -1) {
     int xPos = line.indexOf("X:") + 2;
@@ -433,16 +1014,14 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
 
   // If in FileList view, BTN6 previews the currently highlighted file on LCD
   if (_uiState == UiState::FileList && buttonNumber == (uint8_t)PinConfig::BTN6) {
-    // preview from selected storage source
-    if (_fileListSource == JobSource::SdCard) {
-      if (_fileListSelected < _fileListPaths.size()) {
-        // Show a small textual preview on the LCD using SdCardReader helper
-        std::vector<String> preview = _sdCard.previewFileLines(_fileListPaths[_fileListSelected].c_str(), 4, 18);
-        if (preview.empty()) {
-          _lcd.showMessage("Preview", "Tidak dapat membaca file");
-        } else {
-          _lcd.showList("Preview", preview);
-        }
+    if (_fileListSelected < _fileListPaths.size() &&
+        _fileListSelected < _fileListIsDirectory.size() &&
+        !_fileListIsDirectory[_fileListSelected]) {
+      std::vector<String> preview = _sdCard.previewFileLines(_fileListPaths[_fileListSelected].c_str(), 4, 18);
+      if (preview.empty()) {
+        _lcd.showMessage("Preview", "Tidak dapat membaca file");
+      } else {
+        _lcd.showList("Preview", preview);
       }
     }
     return;
@@ -460,9 +1039,29 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
 
   // Jika sedang melihat daftar file dan BACK ditekan -> kembali ke Menu
   if (_uiState == UiState::FileList && buttonNumber == (uint8_t)PinConfig::BTN8) {
+    if (_currentSdDirectory != "/") {
+      openSdFileList(parentSdDirectory(_currentSdDirectory));
+      return;
+    }
+
     _uiState = UiState::Menu;
     if (!popMenuState()) {
       showMainMenuScreen(1);
+    }
+    return;
+  }
+
+  if (_uiState == UiState::MachineStatus && buttonNumber == (uint8_t)PinConfig::BTN8) {
+    if (_machineFeedrateEditing || _machineWorkAreaEditing) {
+      _machineFeedrateEditing = false;
+      _machineWorkAreaEditing = false;
+      showMachineStatusScreen();
+      return;
+    }
+
+    _uiState = UiState::Menu;
+    if (!popMenuState()) {
+      showMainMenuScreen(2);
     }
     return;
   }
@@ -600,7 +1199,7 @@ void AppController::enterSetOrigin() {
   updateJogDisplay();
 }
 
-void AppController::confirmSetOrigin() {
+void AppController::confirmSetOrigin(UiState returnState) {
   _activeJogPin = 0;
   _isJogAdjusting = false;
 
@@ -614,7 +1213,9 @@ void AppController::confirmSetOrigin() {
   _posZ = 0.0f;
   showInfoScreen(
     "SET ORIGIN",
-    AppConfig::ENABLE_SET_ORIGIN_CONTROL ? "Origin disimpan" : "Simulasi disimpan"
+    AppConfig::ENABLE_SET_ORIGIN_CONTROL ? "Origin disimpan" : "Simulasi disimpan",
+    returnState,
+    AppConfig::CONFIRM_RESULT_MESSAGE_MS
   );
 }
 
@@ -653,18 +1254,29 @@ void AppController::processSelectAction() {
     }
 
     if (choice == "Select Job") {
-      showSubMenu(
-        "SELECT JOB",
-        {"Browse SD Card", "Selected File", "Job Status"}
-      );
+      if (!_sdCard.isReady()) {
+        showInfoScreen("SD CARD", "Belum siap");
+        return;
+      }
+
+      pushMenuState(items, sel);
+      openSdFileList("/");
       return;
     }
 
-    if (choice == "Machine Control") {
-      showSubMenu(
-        "MACHINE CONTROL",
-        {"Spindle ON (M3)", "Spindle OFF (M5)", "Fan ON", "Fan OFF"}
-      );
+    if (choice == "Machine Ctrl & Stat" || choice == "Machine Control") {
+      pushMenuState(items, sel);
+      _machineFeedrateEditing = false;
+      _machineWorkAreaEditing = false;
+      _machineStatusSelected = 0;
+      _machineStatusOffset = 0;
+      _lastM203Request = 0;
+      _lastM115Request = 0;
+      _lastM119Request = 0;
+      showMachineStatusScreen();
+      requestMachineFeedrateStatus(true);
+      requestMachineGeometryStatus(true);
+      requestHomeSensorStatus(true);
       return;
     }
 
@@ -698,48 +1310,6 @@ void AppController::processSelectAction() {
       return;
     }
 
-    if (choice == "Browse SD Card") {
-      if (AppConfig::UI_DEVELOPMENT_MODE) {
-        showInfoScreen("UI PREVIEW", "File browser tahap 2");
-        return;
-      }
-
-      if (!_sdCard.isReady()) {
-        showInfoScreen("SD CARD", "Belum siap");
-        return;
-      }
-
-      pushMenuState(items, sel);
-      _fileListPaths = _sdCard.listFileNames("/", 0, 50);
-      _fileList.clear();
-      for (const String &path : _fileListPaths) {
-        _fileList.push_back(basenameForLcd(path));
-      }
-      _fileListSelected = 0;
-      _fileListOffset = 0;
-      _fileListSource = JobSource::SdCard;
-      _uiState = UiState::FileList;
-
-      size_t end = min((size_t)5, _fileList.size());
-      std::vector<String> page(_fileList.begin(), _fileList.begin() + end);
-      _lcd.showMenu("FILES", page, 0);
-      return;
-    }
-
-    if (choice == "Selected File") {
-      String selected = computeJobName();
-      showInfoScreen(
-        "SELECTED FILE",
-        selected.length() ? selected.c_str() : "Belum ada file"
-      );
-      return;
-    }
-
-    if (choice == "Job Status") {
-      showInfoScreen("JOB STATUS", "Belum ada job aktif");
-      return;
-    }
-
     if (choice == "Spindle ON (M3)") {
       if (AppConfig::UI_DEVELOPMENT_MODE) {
         showInfoScreen("UI PREVIEW", "M3 belum dikirim");
@@ -757,11 +1327,6 @@ void AppController::processSelectAction() {
         Serial1.println("M5");
         showInfoScreen("SPINDLE", "M5 dikirim");
       }
-      return;
-    }
-
-    if (choice == "Fan ON" || choice == "Fan OFF") {
-      showInfoScreen("UI PREVIEW", "Kontrol fan tahap 2");
       return;
     }
 
@@ -805,14 +1370,12 @@ void AppController::processSelectAction() {
 
   // If currently browsing file list and ENTER pressed, show confirm dialog
   if (_uiState == UiState::FileList) {
-    if (_fileList.empty() || _fileListSelected >= _fileListPaths.size()) {
-      _lcd.showMessage("Files", "Tidak ada file");
-      return;
-    }
+    enterSelectedFileListItem();
+    return;
+  }
 
-    _confirmSelectedIndex = 0;
-    _uiState = UiState::ConfirmSelect;
-    _lcd.showConfirm("Confirm", "Set as job?", _confirmSelectedIndex);
+  if (_uiState == UiState::MachineStatus) {
+    handleMachineStatusSelect();
     return;
   }
 
@@ -898,12 +1461,77 @@ void AppController::onEncoderTurned(int8_t direction) {
       }
     }
 
-    // draw current page
-    size_t end = _fileListOffset + pageSize;
-    if (end > _fileList.size()) end = _fileList.size();
-    std::vector<String> page;
-    for (size_t i = _fileListOffset; i < end; ++i) page.push_back(_fileList[i]);
-    _lcd.showMenu("Files", page, _fileListSelected - _fileListOffset, 0);
+    showCurrentFileListPage();
+    return;
+  }
+
+  if (_uiState == UiState::MachineStatus) {
+    if (_machineFeedrateEditing) {
+      bool fastStep = (digitalRead(PinConfig::ENCODER_SW) == LOW);
+      int step = fastStep
+        ? (int)AppConfig::MACHINE_FEEDRATE_FAST_STEP_MM_S
+        : (int)AppConfig::MACHINE_FEEDRATE_STEP_MM_S;
+      int delta = direction > 0 ? step : -step;
+
+      if (_machineStatusSelected == 1) {
+        _machineFeedrateXY = clampFeedrate(
+          (int)_machineFeedrateXY + delta,
+          AppConfig::MACHINE_FEEDRATE_MAX_MM_S
+        );
+      } else if (_machineStatusSelected == 2) {
+        _machineFeedrateZ = clampFeedrate(
+          (int)_machineFeedrateZ + delta,
+          AppConfig::MACHINE_FEEDRATE_MAX_MM_S
+        );
+      }
+
+      showMachineStatusScreen();
+      return;
+    }
+
+    if (_machineWorkAreaEditing) {
+      bool fastStep = (digitalRead(PinConfig::ENCODER_SW) == LOW);
+      int step = fastStep
+        ? (int)AppConfig::MACHINE_WORK_AREA_FAST_STEP_MM
+        : (int)AppConfig::MACHINE_WORK_AREA_STEP_MM;
+      int delta = direction > 0 ? step : -step;
+
+      if (_machineStatusSelected == 3) {
+        _machineWorkAreaX = clampUnsigned(
+          (int)_machineWorkAreaX + delta,
+          AppConfig::MACHINE_WORK_AREA_MIN_MM,
+          AppConfig::MACHINE_WORK_AREA_MAX_MM
+        );
+      } else if (_machineStatusSelected == 4) {
+        _machineWorkAreaY = clampUnsigned(
+          (int)_machineWorkAreaY + delta,
+          AppConfig::MACHINE_WORK_AREA_MIN_MM,
+          AppConfig::MACHINE_WORK_AREA_MAX_MM
+        );
+      } else if (_machineStatusSelected == 5) {
+        _machineWorkAreaZ = clampUnsigned(
+          (int)_machineWorkAreaZ + delta,
+          AppConfig::MACHINE_WORK_AREA_MIN_MM,
+          AppConfig::MACHINE_WORK_AREA_MAX_MM
+        );
+      }
+
+      showMachineStatusScreen();
+      return;
+    }
+
+    const size_t itemCount = machineStatusItems().size();
+    if (itemCount > 0) {
+      if (direction > 0) {
+        _machineStatusSelected = (_machineStatusSelected + 1) % itemCount;
+      } else {
+        _machineStatusSelected = (_machineStatusSelected == 0)
+          ? itemCount - 1
+          : _machineStatusSelected - 1;
+      }
+    }
+
+    showMachineStatusScreen();
     return;
   }
 
@@ -935,23 +1563,47 @@ void AppController::onEncoderPressed() {
 // Note: _fileList contains display names while _fileListPaths has full paths.
 // Selecting a file changes internal state _selectedJobSource and returns
 // user feedback on the LCD.
-void AppController::selectFileFromList() {
+bool AppController::selectFileFromList() {
   if (_fileListSelected >= _fileListPaths.size()) {
-    _lcd.showMessage("File", "Invalid selection");
-    return;
+    showInfoScreen(
+      "File",
+      "Invalid selection",
+      UiState::FileList,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return false;
   }
 
   const String &path = _fileListPaths[_fileListSelected];
 
-  if (_fileListSource == JobSource::SdCard) {
-    // Attempt to select SD job file; shows confirmation on success/fail
-    if (selectSdCardJobFile(path.c_str())) {
-      _lcd.showMessage("SD Card", "File dipilih");
-      _selectedJobSource = JobSource::SdCard;
-    } else {
-      _lcd.showMessage("SD Card", "Pilih gagal");
-    }
+  if (!_sdCard.isReady()) {
+    showInfoScreen(
+      "SD Card",
+      "Belum siap",
+      UiState::FileList,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return false;
   }
+
+  if (_sdCard.selectJobFile(path.c_str())) {
+    _selectedJobSource = JobSource::SdCard;
+    showInfoScreen(
+      "SD Card",
+      "File dipilih",
+      UiState::FileList,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return true;
+  }
+
+  showInfoScreen(
+    "SD Card",
+    "Pilih gagal",
+    UiState::FileList,
+    AppConfig::CONFIRM_RESULT_MESSAGE_MS
+  );
+  return false;
 }
 
 // Implementasi helper untuk memilih file job dari SD card
@@ -1026,12 +1678,9 @@ void AppController::beginInput() {
 }
 
 void AppController::beginStorage() {
-  // Inisialisasi modul storage tapi jangan langsung menimpa layar boot/standby.
-  // updateStorageFileDisplay() akan dijalankan oleh loop ketika UI berada
-  // pada mode Standby.
+  // Inisialisasi SD card tanpa menimpa layar boot/standby.
+  // Daftar file dimuat saat user membuka menu Select Job.
   _storageStarted = _sdCard.begin();
-  // Do not show SD files automatically on standby; user must enter SD Card menu
-  _showSdFilesOnLcd = false;
 }
 
 
@@ -1095,42 +1744,6 @@ void AppController::updateNetwork() {
 }
 
 void AppController::updateStorageFileDisplay() {
-  // Only refresh file listing while user is actively in FileList view.
-  if (_uiState != UiState::FileList) return;
-
-  if (_lastStorageDisplay != 0 && millis() - _lastStorageDisplay < AppConfig::STORAGE_DISPLAY_INTERVAL_MS) {
-    return;
-  }
-
-  _lastStorageDisplay = millis();
-
-  if (!_sdCard.isReady()) {
-    _lcd.showMessage("SD Card", "Belum siap");
-    return;
-  }
-
-  // Refresh file list and redraw current page
-  std::vector<String> full = _sdCard.listFileNames("/", 0, 50);
-  _fileListPaths = full;
-  _fileList.clear();
-  for (const String &p : full) _fileList.push_back(basenameForLcd(p));
-
-  if (_fileList.empty()) {
-    _fileListSelected = 0;
-    _fileListOffset = 0;
-    _lcd.showMessage("Files", "Tidak ada file");
-    return;
-  }
-
-  if (_fileListSelected >= _fileList.size()) {
-    _fileListSelected = _fileList.size() - 1;
-  }
-
-  const size_t pageSize = 5;
-  _fileListOffset = (_fileListSelected / pageSize) * pageSize;
-  size_t end = _fileListOffset + pageSize;
-  if (end > _fileList.size()) end = _fileList.size();
-  std::vector<String> page;
-  for (size_t i = _fileListOffset; i < end; ++i) page.push_back(_fileList[i]);
-  _lcd.showMenu("Files", page, _fileListSelected - _fileListOffset, 0);
+  // Browser SD dimuat ulang saat user membuka folder, bukan refresh berkala.
+  // Ini mencegah kursor file meloncat saat encoder sedang diputar.
 }

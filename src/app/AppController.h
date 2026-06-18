@@ -37,6 +37,9 @@ class AppController {
     void beginStorage();
     void beginNetwork();
 
+    // Dipanggil oleh job sender saat file G-code selesai dieksekusi.
+    void notifyJobFinished();
+
   // Fungsi pengujian hardware.
   void runSdCardDiagnostics();
 
@@ -65,7 +68,6 @@ class AppController {
     LcdHandler _lcd;
     Menu _menu;
     SdCardReader _sdCard;
-  // USB support removed
 
     // UI state
     enum class UiState {
@@ -76,7 +78,8 @@ class AppController {
       FileList,
       ConfirmSelect,
       ConfirmAction,
-      SetOrigin
+      SetOrigin,
+      MachineStatus
     };
     UiState _uiState = UiState::Boot;
 
@@ -91,16 +94,18 @@ class AppController {
   std::vector<String> _fileList;
   // _fileListPaths stores the full paths required for selecting a job
   std::vector<String> _fileListPaths;
+  std::vector<bool> _fileListIsDirectory;
   size_t _fileListSelected = 0;
   size_t _fileListOffset = 0; // starting index shown on screen
-    JobSource _fileListSource = JobSource::None;
+  String _currentSdDirectory = "/";
   // Confirm dialog state: 0 = Yes, 1 = No
   size_t _confirmSelectedIndex = 0;
 
   enum class PendingAction {
     None,
     HomeAll,
-    SetOrigin
+    SetOrigin,
+    RepeatJob
   };
   PendingAction _pendingAction = PendingAction::None;
   UiState _confirmReturnState = UiState::Menu;
@@ -123,17 +128,33 @@ class AppController {
   void showStandbyScreen();
   void showMainMenuScreen(size_t selected = 0);
   void showSubMenu(const char *title, const std::vector<String> &items);
+  void showMachineStatusScreen();
+  std::vector<String> machineStatusItems() const;
+  void handleMachineStatusSelect();
+  bool toggleSpindle();
+  bool applyMachineFeedrate();
+  void requestMachineFeedrateStatus(bool force = false);
+  void parseMachineFeedrateStatus(const String &line);
+  void requestMachineGeometryStatus(bool force = false);
+  void parseMachineGeometryStatus(const String &line);
+  void requestHomeSensorStatus(bool force = false);
+  void parseHomeSensorStatus(const String &line);
+  bool loadSdFileList(const String &directory);
+  void openSdFileList(const String &directory = "/");
   void showCurrentFileListPage();
+  void enterSelectedFileListItem();
   void showInfoScreen(
     const char *title,
     const char *message,
-    UiState returnState = UiState::Menu
+    UiState returnState = UiState::Menu,
+    unsigned long autoCloseMs = 0
   );
   void dismissInfoScreen();
   void showActionConfirm(PendingAction action, const char *title, const char *message);
   void redrawActionConfirm();
   void cancelActionConfirm();
   void executeConfirmedAction();
+  void repeatSelectedJob(UiState returnState);
   bool isConfirmationState() const;
   void acceptConfirmation();
   void rejectConfirmation();
@@ -146,12 +167,27 @@ class AppController {
 
     // Status runtime aplikasi.
     unsigned long _lastHeartbeat = 0;
-    unsigned long _lastStorageDisplay = 0;
-    bool _showSdFilesOnLcd = true;
+    unsigned long _infoShownAt = 0;
+    unsigned long _infoAutoCloseMs = 0;
     bool _inputStarted = false;
     bool _storageStarted = false;
     bool _networkStarted = false;
-  // Helper to compute ETA string for selected job (mm:ss or "--:--")
+    bool _spindleOn = false;
+    bool _machineFeedrateEditing = false;
+    bool _machineFeedrateLoaded = false;
+    bool _machineWorkAreaEditing = false;
+    bool _machineWorkAreaLoaded = false;
+    size_t _machineStatusSelected = 0;
+    size_t _machineStatusOffset = 0;
+    unsigned int _machineFeedrateXY = 0;
+    unsigned int _machineFeedrateZ = 0;
+    unsigned int _machineWorkAreaX = 0;
+    unsigned int _machineWorkAreaY = 0;
+    unsigned int _machineWorkAreaZ = 0;
+    String _homeXStatus = "?";
+    String _homeYStatus = "?";
+    String _homeZStatus = "?";
+  // Helper to compute ETA string for selected job (HH:MM:SS).
   String computeEta() const;
   // Return selected job filename or empty string if none
   String computeJobName() const;
@@ -162,6 +198,9 @@ class AppController {
 
   private:
     unsigned long _lastM114Request = 0;
+    unsigned long _lastM119Request = 0;
+    unsigned long _lastM203Request = 0;
+    unsigned long _lastM115Request = 0;
     void updateMarlinCommunication();
     void parseMarlinResponse(const String &line);
 

@@ -7,6 +7,13 @@
 #include <SD.h>
 #include <vector>
 
+struct SdCardEntry {
+  String path;
+  String name;
+  bool isDirectory = false;
+  size_t size = 0;
+};
+
 class SdCardReader {
   public:
     // Membuat objek pembaca SD card dengan pin SPI yang ditentukan dari PinConfig.
@@ -18,6 +25,9 @@ class SdCardReader {
     // Mengecek apakah SD card berhasil diinisialisasi dan siap digunakan.
     bool isReady() const;
 
+    // Mengambil nama volume SD card jika tersedia dari label FAT.
+    const String &volumeLabel() const;
+
     // Menampilkan tipe, ukuran, total ruang, dan ruang terpakai SD card ke Serial Monitor.
     void printCardInfo();
 
@@ -26,6 +36,9 @@ class SdCardReader {
 
     // Mengambil daftar file/folder agar bisa ditampilkan di LCD/menu.
     std::vector<String> listFileNames(const char *dirname = "/", uint8_t levels = 0, size_t maxItems = 20);
+
+    // Mengambil isi folder sebagai entry terstruktur untuk browser job.
+    std::vector<SdCardEntry> listEntries(const char *dirname = "/", size_t maxItems = 50, bool includeParent = true);
 
     // Menjalankan rangkaian tes baca/tulis/hapus file untuk validasi SD card.
     void runDiagnostics();
@@ -80,9 +93,13 @@ class SdCardReader {
     uint8_t _mosiPin;
     bool _ready = false;
     String _selectedJobFile;
+    String _volumeLabel;
 
     // Mengubah kode tipe kartu dari library SD menjadi teks.
     const char *cardTypeName(uint8_t cardType) const;
+
+    // Membaca label volume dari boot sector FAT.
+    String readVolumeLabel();
 
     // Fungsi internal rekursif untuk menampilkan isi direktori.
     void listDir(fs::FS &fs, const char *dirname, uint8_t levels);

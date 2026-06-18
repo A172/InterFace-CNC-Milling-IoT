@@ -23,11 +23,6 @@ namespace PinConfig {
   constexpr uint8_t CNC_UART_TX = 44;  // Transmit ke SKR
   // CATATAN: Perhatikan tegangan (logic level converter jika diperlukan)
 
-  // ========== USB (OTG Mode - opsional) ==========
-  constexpr uint8_t USB_D_PLUS = 20;   // D+ (USB)
-  constexpr uint8_t USB_D_MINUS = 19;  // D- (USB)
-  // CATATAN: Power USB 5V masuk ke VIN ESP32-S3
-
   // ========== Push Button (Jog & Navigasi) ==========
   // Catatan: Semua tombol aktif LOW (terpencet = LOW, lepas = HIGH)
   constexpr uint8_t BTN_X_PLUS = 16;   // Jog X+

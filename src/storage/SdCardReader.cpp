@@ -1,5 +1,116 @@
 #include "SdCardReader.h"
 
+namespace {
+  uint16_t readLe16(const uint8_t *data) {
+    return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+  }
+
+  uint32_t readLe32(const uint8_t *data) {
+    return (uint32_t)data[0] |
+           ((uint32_t)data[1] << 8) |
+           ((uint32_t)data[2] << 16) |
+           ((uint32_t)data[3] << 24);
+  }
+
+  bool hasBootSignature(const uint8_t *sector) {
+    return sector[510] == 0x55 && sector[511] == 0xAA;
+  }
+
+  bool isLikelyFatBootSector(const uint8_t *sector) {
+    if (!hasBootSignature(sector)) {
+      return false;
+    }
+
+    uint16_t bytesPerSector = readLe16(sector + 11);
+    bool validSectorSize = bytesPerSector == 512 ||
+                           bytesPerSector == 1024 ||
+                           bytesPerSector == 2048 ||
+                           bytesPerSector == 4096;
+
+    return validSectorSize &&
+           sector[13] != 0 &&
+           readLe16(sector + 14) != 0 &&
+           sector[16] != 0;
+  }
+
+  bool isFatPartitionType(uint8_t type) {
+    switch (type) {
+      case 0x01: // FAT12
+      case 0x04: // FAT16 < 32 MB
+      case 0x06: // FAT16
+      case 0x0B: // FAT32
+      case 0x0C: // FAT32 LBA
+      case 0x0E: // FAT16 LBA
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  String parseFatVolumeLabel(const uint8_t *labelBytes) {
+    char label[12];
+    for (uint8_t i = 0; i < 11; ++i) {
+      char c = (char)labelBytes[i];
+      label[i] = (c >= 32 && c <= 126) ? c : ' ';
+    }
+    label[11] = '\0';
+
+    String result(label);
+    result.trim();
+
+    if (result == "NO NAME") {
+      return String();
+    }
+
+    return result;
+  }
+
+  String normalizeDirectoryPath(const String &path) {
+    String normalized = path.length() ? path : "/";
+    normalized.replace("//", "/");
+
+    if (!normalized.startsWith("/")) {
+      normalized = "/" + normalized;
+    }
+
+    if (normalized.length() > 1 && normalized.endsWith("/")) {
+      normalized.remove(normalized.length() - 1);
+    }
+
+    return normalized;
+  }
+
+  String parentDirectoryPath(const String &path) {
+    String normalized = normalizeDirectoryPath(path);
+    if (normalized == "/") {
+      return "/";
+    }
+
+    int slashIndex = normalized.lastIndexOf('/');
+    if (slashIndex <= 0) {
+      return "/";
+    }
+
+    return normalized.substring(0, slashIndex);
+  }
+
+  String basenameFromPath(const String &path) {
+    String normalized = path;
+    normalized.replace("//", "/");
+
+    if (normalized.length() > 1 && normalized.endsWith("/")) {
+      normalized.remove(normalized.length() - 1);
+    }
+
+    int slashIndex = normalized.lastIndexOf('/');
+    if (slashIndex >= 0 && slashIndex < (int)normalized.length() - 1) {
+      return normalized.substring(slashIndex + 1);
+    }
+
+    return normalized;
+  }
+}
+
 SdCardReader::SdCardReader(uint8_t csPin, uint8_t sckPin, uint8_t misoPin, uint8_t mosiPin)
   : _csPin(csPin), _sckPin(sckPin), _misoPin(misoPin), _mosiPin(mosiPin) {
 }
@@ -10,22 +121,33 @@ bool SdCardReader::begin() {
   if (!SD.begin(_csPin)) {
     Serial.println("SD Card gagal diinisialisasi");
     _ready = false;
+    _volumeLabel = "";
     return false;
   }
 
   if (SD.cardType() == CARD_NONE) {
     Serial.println("SD Card tidak terdeteksi");
     _ready = false;
+    _volumeLabel = "";
     return false;
   }
 
   _ready = true;
+  _volumeLabel = readVolumeLabel();
   Serial.println("SD Card siap digunakan");
+  if (_volumeLabel.length()) {
+    Serial.print("Nama SD Card: ");
+    Serial.println(_volumeLabel);
+  }
   return true;
 }
 
 bool SdCardReader::isReady() const {
   return _ready;
+}
+
+const String &SdCardReader::volumeLabel() const {
+  return _volumeLabel;
 }
 
 void SdCardReader::printCardInfo() {
@@ -36,9 +158,47 @@ void SdCardReader::printCardInfo() {
 
   Serial.print("SD Card Type: ");
   Serial.println(cardTypeName(SD.cardType()));
+  Serial.print("Volume Label: ");
+  Serial.println(_volumeLabel.length() ? _volumeLabel : "SD");
   Serial.printf("SD Card Size: %lluMB\n", SD.cardSize() / (1024 * 1024));
   Serial.printf("Total space: %lluMB\n", SD.totalBytes() / (1024 * 1024));
   Serial.printf("Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
+}
+
+String SdCardReader::readVolumeLabel() {
+  if (!_ready) {
+    return String();
+  }
+
+  uint8_t sector[512];
+  if (!SD.readRAW(sector, 0)) {
+    return String();
+  }
+
+  if (!isLikelyFatBootSector(sector)) {
+    uint32_t bootSector = 0;
+    for (uint8_t i = 0; i < 4; ++i) {
+      const uint8_t *entry = sector + 446 + (i * 16);
+      uint8_t partitionType = entry[4];
+      uint32_t partitionStart = readLe32(entry + 8);
+
+      if (isFatPartitionType(partitionType) && partitionStart > 0) {
+        bootSector = partitionStart;
+        break;
+      }
+    }
+
+    if (bootSector == 0 || !SD.readRAW(sector, bootSector)) {
+      return String();
+    }
+  }
+
+  if (!isLikelyFatBootSector(sector)) {
+    return String();
+  }
+
+  bool fat32 = readLe16(sector + 17) == 0 && readLe16(sector + 22) == 0;
+  return parseFatVolumeLabel(sector + (fat32 ? 71 : 43));
 }
 
 void SdCardReader::listFiles(const char *dirname, uint8_t levels) {
@@ -60,6 +220,59 @@ std::vector<String> SdCardReader::listFileNames(const char *dirname, uint8_t lev
 
   collectFileNames(SD, dirname, levels, maxItems, items);
   return items;
+}
+
+std::vector<SdCardEntry> SdCardReader::listEntries(const char *dirname, size_t maxItems, bool includeParent) {
+  std::vector<SdCardEntry> entries;
+
+  if (!_ready) {
+    Serial.println("SD Card belum siap");
+    return entries;
+  }
+
+  String directory = normalizeDirectoryPath(dirname != nullptr ? String(dirname) : String("/"));
+  File root = SD.open(directory.c_str());
+  if (!root || !root.isDirectory()) {
+    Serial.print("Folder SD tidak dapat dibuka: ");
+    Serial.println(directory);
+    if (root) {
+      root.close();
+    }
+    return entries;
+  }
+
+  if (includeParent && directory != "/" && entries.size() < maxItems) {
+    SdCardEntry parentEntry;
+    parentEntry.path = parentDirectoryPath(directory);
+    parentEntry.name = "..";
+    parentEntry.isDirectory = true;
+    parentEntry.size = 0;
+    entries.push_back(parentEntry);
+  }
+
+  File file = root.openNextFile();
+  while (file && entries.size() < maxItems) {
+    SdCardEntry entry;
+    entry.path = String(file.path());
+    if (entry.path.length() == 0) {
+      String fileName = String(file.name());
+      entry.path = directory == "/" ? "/" + basenameFromPath(fileName) : directory + "/" + basenameFromPath(fileName);
+    } else if (!entry.path.startsWith("/")) {
+      entry.path = directory == "/" ? "/" + entry.path : directory + "/" + entry.path;
+    }
+
+    entry.path = normalizeDirectoryPath(entry.path);
+    entry.name = basenameFromPath(entry.path);
+    entry.isDirectory = file.isDirectory();
+    entry.size = file.size();
+    entries.push_back(entry);
+
+    file.close();
+    file = root.openNextFile();
+  }
+
+  root.close();
+  return entries;
 }
 
 void SdCardReader::runDiagnostics() {

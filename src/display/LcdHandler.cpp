@@ -129,13 +129,19 @@ void LcdHandler::showStandbyLines(const char *top, const char *middle, const cha
     _lcd->drawStr(104, 40, pStr);
   }
 
-  // Baris 4: Status Aktivitas (Nama File / ETA / Zzz)
+  // Baris 4-5: Status job dan estimasi waktu kerja.
   if (jobName != nullptr && strlen(jobName) > 0) {
-    // Menampilkan Nama File di Baris 4
-    _lcd->drawStr(0, 58, fitText(jobName, LCD_MAX_CHARS).c_str());
+    _lcd->drawStr(0, 50, fitText(jobName, LCD_MAX_CHARS).c_str());
+
+    if (eta != nullptr && strlen(eta) > 0) {
+      String estimateLine = "Estimasi: ";
+      estimateLine += eta;
+      _lcd->drawStr(0, 62, fitText(estimateLine, LCD_MAX_CHARS).c_str());
+    }
   } else if (eta != nullptr && strlen(eta) > 0) {
-    _lcd->drawStr(0, 58, "ETA:");
-    _lcd->drawStr(30, 58, eta);
+    String estimateLine = "Estimasi: ";
+    estimateLine += eta;
+    _lcd->drawStr(0, 58, fitText(estimateLine, LCD_MAX_CHARS).c_str());
   } else {
     // Posisi Zzz tetap sesuai perbaikan manual Anda
     _lcd->setFont(u8g2_font_ncenB14_tr);
