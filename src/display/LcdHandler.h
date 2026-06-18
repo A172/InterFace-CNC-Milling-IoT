@@ -13,6 +13,8 @@ class LcdHandler {
     void drawText(uint8_t x, uint8_t y, const char *text, bool clearFirst = false);
     void refresh();
     void showMessage(const char *title, const char *message);
+    void showCenteredMessage(const char *title, const char *message);
+    void showWifiSetup(const char *apName);
     void showBootSplash(
       const char *title,
       const char *subtitle,

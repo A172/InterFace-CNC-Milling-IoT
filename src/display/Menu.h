@@ -11,7 +11,7 @@ public:
 
   // Tampilkan standby screen (logo sudah ditampilkan di boot splash).
   // posisiX/Y disediakan untuk fleksibilitas layout.
-  void showStandby(float x = 0.0, float y = 0.0, float z = 0.0, const char *eta = nullptr, const char *jobName = nullptr, int progress = -1, const char *timeStr = nullptr);
+  void showStandby(float x = 0.0, float y = 0.0, float z = 0.0, const char *eta = nullptr, const char *jobName = nullptr, int progress = -1, const char *timeStr = nullptr, const char *machineStatus = nullptr);
 
   // Tampilkan main menu dengan daftar pilihan.
   void showMainMenu(const std::vector<String> &items, size_t selected);

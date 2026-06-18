@@ -1,7 +1,8 @@
 #include "AppController.h"
 #include <SD.h>
+#include <algorithm>
 #include <math.h>
-#include <time.h>
+#include <Preferences.h>
 #include <WiFi.h>
 
 namespace {
@@ -99,13 +100,30 @@ namespace {
   }
 
   String fileListTitle(const String &volumeLabel, const String &directory) {
-    String title = volumeLabel.length() ? volumeLabel : "SD";
+    String label = volumeLabel;
+    label.trim();
+
+    String title = "SD";
+    if (label.length() > 0) {
+      title += " ";
+      title += label;
+    }
 
     if (directory == "/") {
       return title + ":/";
     }
 
     return title + ":" + directory;
+  }
+
+  String entrySortKey(const SdCardEntry &entry) {
+    String key = entry.name;
+    key.toLowerCase();
+    return key;
+  }
+
+  bool entryNameLess(const SdCardEntry &left, const SdCardEntry &right) {
+    return entrySortKey(left) < entrySortKey(right);
   }
 
   unsigned int clampUnsigned(int value, unsigned int minValue, unsigned int maxValue) {
@@ -207,11 +225,85 @@ namespace {
     return item;
   }
 
+  constexpr size_t MACHINE_ITEM_SPINDLE = 0;
+  constexpr size_t MACHINE_ITEM_MARLIN = 1;
+  constexpr size_t MACHINE_ITEM_SOFT_ENDSTOP = 2;
+  constexpr size_t MACHINE_ITEM_FEED_XY = 3;
+  constexpr size_t MACHINE_ITEM_FEED_Z = 4;
+  constexpr size_t MACHINE_ITEM_AREA_X = 5;
+  constexpr size_t MACHINE_ITEM_AREA_Y = 6;
+  constexpr size_t MACHINE_ITEM_AREA_Z = 7;
+  constexpr size_t MACHINE_ITEM_HOME_X = 8;
+  constexpr size_t MACHINE_ITEM_HOME_Y = 9;
+  constexpr size_t MACHINE_ITEM_HOME_Z = 10;
+  constexpr size_t MACHINE_ITEM_REFRESH = 11;
+
+  constexpr size_t NETWORK_ITEM_WIFI = 0;
+  constexpr size_t NETWORK_ITEM_SSID = 1;
+  constexpr size_t NETWORK_ITEM_IP = 2;
+  constexpr size_t NETWORK_ITEM_MQTT = 3;
+  constexpr size_t NETWORK_ITEM_MQTT_LINK = 4;
+  constexpr size_t NETWORK_ITEM_BROKER = 5;
+  constexpr size_t NETWORK_ITEM_AP = 6;
+  constexpr size_t NETWORK_ITEM_TIME = 7;
+  constexpr size_t NETWORK_ITEM_DATE = 8;
+  constexpr size_t NETWORK_ITEM_RESET = 9;
+
+  constexpr const char *NETWORK_PREFS_NAMESPACE = "cnc_network";
+  constexpr const char *NETWORK_PREF_WIFI = "wifi";
+  constexpr const char *NETWORK_PREF_MQTT = "mqtt";
+  constexpr const char *NETWORK_PREF_MQTT_BROKER = "mqtt_host";
+  constexpr const char *NETWORK_PREF_MQTT_PORT = "mqtt_port";
+  constexpr const char *NETWORK_PREF_MQTT_TOPIC = "mqtt_topic";
+  constexpr const char *NETWORK_PREF_MQTT_USER = "mqtt_user";
+  constexpr const char *NETWORK_PREF_MQTT_PASS = "mqtt_pass";
+
+  String normalizedMqttText(String value, const char *fallback, size_t maxLen, bool allowEmpty) {
+    value.trim();
+
+    if (value.length() == 0 && !allowEmpty) {
+      value = fallback;
+    }
+
+    if (value.length() > maxLen) {
+      value.remove(maxLen);
+    }
+
+    return value;
+  }
+
+  uint16_t normalizedMqttPort(uint32_t port) {
+    if (port == 0 || port > 65535) {
+      return AppConfig::MQTT_PORT;
+    }
+
+    return (uint16_t)port;
+  }
+
+  uint16_t parseMqttPort(const String &value) {
+    String trimmed = value;
+    trimmed.trim();
+    return normalizedMqttPort((uint32_t)trimmed.toInt());
+  }
+
+  String wifiNetworkStatus(bool enabled, bool connected) {
+    if (!enabled) {
+      return String("WiFi: OFF");
+    }
+
+    if (connected) {
+      return String("WiFi terkoneksi !!!");
+    }
+
+    // Versi singkat agar muat di satu baris LCD 128x64.
+    return String("WiFi gagal konek !!!");
+  }
+
   std::vector<String> mainMenuItems() {
     return {
       "Move & Jog",
       "Select Job",
-      "Machine Ctrl & Stat",
+      "Machine Ctrl&Status",
       "Network",
       "Settings"
     };
@@ -273,6 +365,8 @@ void AppController::showStandbyScreen() {
   const char *jobNamePtr = standbyJobName.length() ? standbyJobName.c_str() : nullptr;
   const char *etaPtr = eta.length() ? eta.c_str() : nullptr;
   const char *timePtr = time.length() ? time.c_str() : nullptr;
+  String machineStatus = standbyMarlinStatusText();
+  const char *machineStatusPtr = machineStatus.length() ? machineStatus.c_str() : nullptr;
 
   _menu.showStandby(
     _posX,
@@ -281,7 +375,8 @@ void AppController::showStandbyScreen() {
     etaPtr,
     jobNamePtr,
     computeProgress(),
-    timePtr
+    timePtr,
+    machineStatusPtr
   );
 }
 
@@ -297,17 +392,84 @@ void AppController::showSubMenu(const char *title, const std::vector<String> &it
   _menu.showMenu(title, items, 0);
 }
 
+bool AppController::isMarlinResponding() const {
+  if (!_marlinEverResponded) {
+    return false;
+  }
+
+  return millis() - _lastMarlinResponseMs <= AppConfig::MARLIN_RESPONSE_TIMEOUT_MS;
+}
+
+String AppController::marlinStatusText() const {
+  if (isMarlinResponding()) {
+    return String("OK");
+  }
+
+  if (!_marlinEverResponded &&
+      (_lastMarlinStatusPoll == 0 ||
+       millis() - _lastMarlinStatusPoll <= AppConfig::MARLIN_RESPONSE_TIMEOUT_MS)) {
+    return String("WAIT");
+  }
+
+  return String("NO RESP");
+}
+
+String AppController::currentUiStateName() const {
+  switch (_uiState) {
+    case UiState::Boot: return String("boot");
+    case UiState::Standby: return String("standby");
+    case UiState::Menu: return String("menu");
+    case UiState::Info: return String("info");
+    case UiState::FileList: return String("file_list");
+    case UiState::ConfirmSelect: return String("confirm_select");
+    case UiState::ConfirmAction: return String("confirm_action");
+    case UiState::SetOrigin: return String("set_origin");
+    case UiState::MachineStatus: return String("machine_status");
+    case UiState::NetworkStatus: return String("network_status");
+  }
+
+  return String("unknown");
+}
+
+String AppController::softEndstopStatusText() const {
+  if (!_softEndstopLoaded) {
+    return String("?");
+  }
+
+  return _softEndstopEnabled ? String("ON") : String("OFF");
+}
+
+String AppController::standbyMarlinStatusText() const {
+  if (!AppConfig::ENABLE_MARLIN_STATUS_MONITOR) {
+    return String();
+  }
+
+  String status = marlinStatusText();
+  if (status == "NO RESP") {
+    return String("NO");
+  }
+  if (status == "WAIT") {
+    return String("--");
+  }
+  return status;
+}
+
 std::vector<String> AppController::machineStatusItems() const {
+  String softEndstop = String("SoftEnd: ") + softEndstopStatusText();
+
   return {
     String("Spindle: ") + (_spindleOn ? "ON" : "OFF"),
-    feedrateItem("Feed XY", _machineFeedrateXY, _machineFeedrateLoaded, _machineFeedrateEditing && _machineStatusSelected == 1),
-    feedrateItem("Feed Z", _machineFeedrateZ, _machineFeedrateLoaded, _machineFeedrateEditing && _machineStatusSelected == 2),
-    millimeterItem("Area X", _machineWorkAreaX, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == 3),
-    millimeterItem("Area Y", _machineWorkAreaY, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == 4),
-    millimeterItem("Area Z", _machineWorkAreaZ, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == 5),
+    String("Marlin: ") + marlinStatusText(),
+    softEndstop,
+    feedrateItem("Feed XY", _machineFeedrateXY, _machineFeedrateLoaded, _machineFeedrateEditing && _machineStatusSelected == MACHINE_ITEM_FEED_XY),
+    feedrateItem("Feed Z", _machineFeedrateZ, _machineFeedrateLoaded, _machineFeedrateEditing && _machineStatusSelected == MACHINE_ITEM_FEED_Z),
+    millimeterItem("Area X", _machineWorkAreaX, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == MACHINE_ITEM_AREA_X),
+    millimeterItem("Area Y", _machineWorkAreaY, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == MACHINE_ITEM_AREA_Y),
+    millimeterItem("Area Z", _machineWorkAreaZ, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == MACHINE_ITEM_AREA_Z),
     String("Home X: ") + _homeXStatus,
     String("Home Y: ") + _homeYStatus,
-    String("Home Z: ") + _homeZStatus
+    String("Home Z: ") + _homeZStatus,
+    String("Refresh Status")
   };
 }
 
@@ -334,15 +496,51 @@ void AppController::showMachineStatusScreen() {
   );
 }
 
+void AppController::refreshMachineStatus() {
+  _machineFeedrateLoaded = false;
+  _machineWorkAreaLoaded = false;
+  _softEndstopLoaded = false;
+  _homeXStatus = "?";
+  _homeYStatus = "?";
+  _homeZStatus = "?";
+  _lastM203Request = 0;
+  _lastM115Request = 0;
+  _lastM119Request = 0;
+  _lastM211Request = 0;
+
+  requestMachineFeedrateStatus(true);
+  requestMachineGeometryStatus(true);
+  requestHomeSensorStatus(true);
+  requestSoftEndstopStatus(true);
+
+  if (_uiState == UiState::MachineStatus) {
+    showMachineStatusScreen();
+  }
+}
+
 void AppController::handleMachineStatusSelect() {
-  if (_machineStatusSelected == 0) {
-    if (toggleSpindle()) {
-      showMachineStatusScreen();
-    }
+  if (_machineStatusSelected == MACHINE_ITEM_SPINDLE) {
+    showActionConfirm(
+      PendingAction::SpindleToggle,
+      "CONFIRM SPINDLE",
+      _spindleOn ? "Matikan spindle?" : "Nyalakan spindle?"
+    );
     return;
   }
 
-  if (_machineStatusSelected == 1 || _machineStatusSelected == 2) {
+  if (_machineStatusSelected == MACHINE_ITEM_MARLIN) {
+    refreshMachineStatus();
+    return;
+  }
+
+  if (_machineStatusSelected == MACHINE_ITEM_SOFT_ENDSTOP) {
+    requestSoftEndstopStatus(true);
+    showMachineStatusScreen();
+    return;
+  }
+
+  if (_machineStatusSelected == MACHINE_ITEM_FEED_XY ||
+      _machineStatusSelected == MACHINE_ITEM_FEED_Z) {
     if (!_machineFeedrateLoaded) {
       requestMachineFeedrateStatus(true);
       showMachineStatusScreen();
@@ -362,7 +560,8 @@ void AppController::handleMachineStatusSelect() {
     return;
   }
 
-  if (_machineStatusSelected >= 3 && _machineStatusSelected <= 5) {
+  if (_machineStatusSelected >= MACHINE_ITEM_AREA_X &&
+      _machineStatusSelected <= MACHINE_ITEM_AREA_Z) {
     if (!_machineWorkAreaLoaded) {
       requestMachineGeometryStatus(true);
       showMachineStatusScreen();
@@ -374,8 +573,403 @@ void AppController::handleMachineStatusSelect() {
     return;
   }
 
+  if (_machineStatusSelected >= MACHINE_ITEM_HOME_X &&
+      _machineStatusSelected <= MACHINE_ITEM_HOME_Z) {
+    requestHomeSensorStatus(true);
+    showMachineStatusScreen();
+    return;
+  }
+
+  if (_machineStatusSelected == MACHINE_ITEM_REFRESH) {
+    refreshMachineStatus();
+    return;
+  }
+
   requestHomeSensorStatus(true);
   showMachineStatusScreen();
+}
+
+std::vector<String> AppController::networkStatusItems() {
+  String mqttLink = "-";
+  if (_mqttEnabled) {
+    mqttLink = _cloud.statusText();
+  }
+
+  return {
+    wifiNetworkStatus(_wifiEnabled, _wifi.isConnected()),
+    String("SSID: ") + (_wifiEnabled ? _wifi.ssid() : "-"),
+    String("IP: ") + (_wifiEnabled ? _wifi.ipAddress() : "-"),
+    String("MQTT: ") + (_mqttEnabled ? "ON" : "OFF"),
+    String("Link: ") + mqttLink,
+    String("Broker: ") + mqttBrokerInfo(),
+    String("AP: ") + _wifi.portalApName(),
+    String("Time: ") + _time.statusText(),
+    String("Date: ") + _time.dateString(),
+    String("Reset WiFi")
+  };
+}
+
+void AppController::loadNetworkSettings() {
+  Preferences prefs;
+  prefs.begin(NETWORK_PREFS_NAMESPACE, true);
+  _wifiEnabled = prefs.getBool(NETWORK_PREF_WIFI, AppConfig::DEFAULT_WIFI_ENABLED);
+  _mqttEnabled = prefs.getBool(NETWORK_PREF_MQTT, AppConfig::DEFAULT_MQTT_ENABLED);
+  _mqttBroker = normalizedMqttText(
+    prefs.getString(NETWORK_PREF_MQTT_BROKER, AppConfig::MQTT_BROKER),
+    AppConfig::MQTT_BROKER,
+    AppConfig::MQTT_BROKER_MAX_LEN,
+    false
+  );
+  _mqttPort = normalizedMqttPort(prefs.getUInt(NETWORK_PREF_MQTT_PORT, AppConfig::MQTT_PORT));
+  _mqttTopicPrefix = normalizedMqttText(
+    prefs.getString(NETWORK_PREF_MQTT_TOPIC, AppConfig::MQTT_TOPIC_PREFIX),
+    AppConfig::MQTT_TOPIC_PREFIX,
+    AppConfig::MQTT_TOPIC_PREFIX_MAX_LEN,
+    false
+  );
+  if (_mqttTopicPrefix == "skripsi/cnc-interface") {
+    _mqttTopicPrefix = AppConfig::MQTT_TOPIC_PREFIX;
+  }
+  _mqttUser = normalizedMqttText(
+    prefs.getString(NETWORK_PREF_MQTT_USER, AppConfig::MQTT_USER),
+    AppConfig::MQTT_USER,
+    AppConfig::MQTT_USER_MAX_LEN,
+    true
+  );
+  _mqttPassword = normalizedMqttText(
+    prefs.getString(NETWORK_PREF_MQTT_PASS, AppConfig::MQTT_PASS),
+    AppConfig::MQTT_PASS,
+    AppConfig::MQTT_PASS_MAX_LEN,
+    true
+  );
+  prefs.end();
+
+  applyMqttSettings();
+  logNetworkSettings("loaded");
+
+  if (!_wifiEnabled) {
+    _mqttEnabled = false;
+  }
+}
+
+void AppController::saveNetworkSettings() {
+  Preferences prefs;
+  prefs.begin(NETWORK_PREFS_NAMESPACE, false);
+  prefs.putBool(NETWORK_PREF_WIFI, _wifiEnabled);
+  prefs.putBool(NETWORK_PREF_MQTT, _mqttEnabled);
+  prefs.putString(NETWORK_PREF_MQTT_BROKER, _mqttBroker);
+  prefs.putUInt(NETWORK_PREF_MQTT_PORT, _mqttPort);
+  prefs.putString(NETWORK_PREF_MQTT_TOPIC, _mqttTopicPrefix);
+  prefs.putString(NETWORK_PREF_MQTT_USER, _mqttUser);
+  prefs.putString(NETWORK_PREF_MQTT_PASS, _mqttPassword);
+  prefs.end();
+}
+
+void AppController::applyMqttSettings() {
+  _cloud.configure(
+    _mqttBroker,
+    _mqttPort,
+    _mqttTopicPrefix,
+    _mqttUser,
+    _mqttPassword
+  );
+}
+
+void AppController::resetMqttSettingsToDefaults() {
+  _mqttBroker = AppConfig::MQTT_BROKER;
+  _mqttPort = AppConfig::MQTT_PORT;
+  _mqttTopicPrefix = AppConfig::MQTT_TOPIC_PREFIX;
+  _mqttUser = AppConfig::MQTT_USER;
+  _mqttPassword = AppConfig::MQTT_PASS;
+  applyMqttSettings();
+}
+
+void AppController::logNetworkSettings(const char *source) const {
+  Serial.print("[NETWORK] ");
+  Serial.print(source);
+  Serial.print(" WiFi=");
+  Serial.print(_wifiEnabled ? "ON" : "OFF");
+  Serial.print(" MQTT=");
+  Serial.print(_mqttEnabled ? "ON" : "OFF");
+  Serial.print(" Broker=");
+  Serial.print(_mqttBroker);
+  Serial.print(":");
+  Serial.print(_mqttPort);
+  Serial.print(" Topic=");
+  Serial.println(_mqttTopicPrefix);
+}
+
+WifiPortalMqttSettings AppController::currentMqttPortalSettings() const {
+  WifiPortalMqttSettings settings;
+  settings.broker = _mqttBroker;
+  settings.port = String(_mqttPort);
+  settings.topicPrefix = _mqttTopicPrefix;
+  settings.user = _mqttUser;
+  settings.password = _mqttPassword;
+  return settings;
+}
+
+void AppController::updateMqttSettingsFromPortal(const WifiPortalMqttSettings &settings) {
+  _mqttBroker = normalizedMqttText(
+    settings.broker,
+    AppConfig::MQTT_BROKER,
+    AppConfig::MQTT_BROKER_MAX_LEN,
+    false
+  );
+  _mqttPort = parseMqttPort(settings.port);
+  _mqttTopicPrefix = normalizedMqttText(
+    settings.topicPrefix,
+    AppConfig::MQTT_TOPIC_PREFIX,
+    AppConfig::MQTT_TOPIC_PREFIX_MAX_LEN,
+    false
+  );
+  _mqttUser = normalizedMqttText(
+    settings.user,
+    AppConfig::MQTT_USER,
+    AppConfig::MQTT_USER_MAX_LEN,
+    true
+  );
+  _mqttPassword = normalizedMqttText(
+    settings.password,
+    AppConfig::MQTT_PASS,
+    AppConfig::MQTT_PASS_MAX_LEN,
+    true
+  );
+
+  saveNetworkSettings();
+  applyMqttSettings();
+  logNetworkSettings("portal");
+}
+
+String AppController::mqttBrokerInfo() const {
+  return _mqttBroker + ":" + String(_mqttPort);
+}
+
+void AppController::stopNetworkRuntime() {
+  _cloud.disconnect();
+  _wifi.disconnect();
+  _time.update(false);
+  _networkStarted = false;
+  _mqttStarted = false;
+}
+
+void AppController::startNetworkFromSettings() {
+  if (!_wifiEnabled) {
+    stopNetworkRuntime();
+    return;
+  }
+
+  _lcd.showWifiSetup(_wifi.portalApName());
+  WifiPortalMqttSettings portalSettings = currentMqttPortalSettings();
+  bool wifiReady = _wifi.begin(&portalSettings);
+  _networkStarted = wifiReady;
+  _mqttStarted = false;
+
+  if (!wifiReady) {
+    return;
+  }
+
+  updateMqttSettingsFromPortal(portalSettings);
+  _time.requestSync();
+
+  if (_mqttEnabled) {
+    _cloud.begin();
+    _mqttStarted = true;
+  }
+}
+
+void AppController::setWifiEnabled(bool enabled) {
+  _wifiEnabled = enabled;
+  if (!_wifiEnabled) {
+    _mqttEnabled = false;
+  }
+  saveNetworkSettings();
+
+  if (_wifiEnabled) {
+    startNetworkFromSettings();
+  } else {
+    stopNetworkRuntime();
+  }
+}
+
+void AppController::setMqttEnabled(bool enabled) {
+  _mqttEnabled = enabled && _wifiEnabled;
+  saveNetworkSettings();
+
+  if (!_mqttEnabled) {
+    _cloud.disconnect();
+    _mqttStarted = false;
+    return;
+  }
+
+  if (_wifi.isConnected()) {
+    applyMqttSettings();
+    _cloud.begin();
+    _mqttStarted = true;
+  }
+}
+
+void AppController::showNetworkStatusScreen() {
+  _uiState = UiState::NetworkStatus;
+
+  std::vector<String> items = networkStatusItems();
+  if (_networkStatusSelected >= items.size()) {
+    _networkStatusSelected = items.empty() ? 0 : items.size() - 1;
+  }
+
+  const size_t pageSize = 5;
+  if (_networkStatusSelected >= _networkStatusOffset + pageSize) {
+    _networkStatusOffset = _networkStatusSelected - pageSize + 1;
+  } else if (_networkStatusSelected < _networkStatusOffset) {
+    _networkStatusOffset = _networkStatusSelected;
+  }
+
+  _lcd.showMenu(
+    "NETWORK",
+    items,
+    _networkStatusSelected,
+    _networkStatusOffset
+  );
+}
+
+void AppController::handleNetworkStatusSelect() {
+  if (_networkStatusSelected == NETWORK_ITEM_WIFI) {
+    showActionConfirm(
+      PendingAction::ToggleWifi,
+      "WIFI",
+      _wifiEnabled ? "Matikan WiFi?" : "Aktifkan WiFi?"
+    );
+    return;
+  }
+
+  if (_networkStatusSelected == NETWORK_ITEM_SSID) {
+    String ssid = _wifi.isConnected() ? _wifi.ssid() : "Belum terhubung";
+    showInfoScreen("SSID", ssid.c_str(), UiState::NetworkStatus, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return;
+  }
+
+  if (_networkStatusSelected == NETWORK_ITEM_IP) {
+    String ip = _wifi.isConnected() ? _wifi.ipAddress() : "Belum terhubung";
+    showInfoScreen("IP ADDRESS", ip.c_str(), UiState::NetworkStatus, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return;
+  }
+
+  if (_networkStatusSelected == NETWORK_ITEM_MQTT) {
+    if (!_wifiEnabled) {
+      showInfoScreen(
+        "MQTT",
+        "WiFi masih OFF",
+        UiState::NetworkStatus,
+        AppConfig::CONFIRM_RESULT_MESSAGE_MS
+      );
+      return;
+    }
+
+    showActionConfirm(
+      PendingAction::ToggleMqtt,
+      "MQTT",
+      _mqttEnabled ? "Matikan MQTT?" : "Aktifkan MQTT?"
+    );
+    return;
+  }
+
+  if (_networkStatusSelected == NETWORK_ITEM_MQTT_LINK) {
+    String title = String("LINK ") + (_mqttEnabled ? _cloud.statusText() : "OFF");
+    String detail = _mqttEnabled ? mqttBrokerInfo() : "MQTT OFF";
+    showInfoScreen(
+      title.c_str(),
+      detail.c_str(),
+      UiState::NetworkStatus,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return;
+  }
+
+  if (_networkStatusSelected == NETWORK_ITEM_BROKER) {
+    String broker = mqttBrokerInfo();
+    showInfoScreen(
+      "MQTT BROKER",
+      broker.c_str(),
+      UiState::NetworkStatus,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return;
+  }
+
+  if (_networkStatusSelected == NETWORK_ITEM_AP) {
+    showInfoScreen("SETUP AP", _wifi.portalApName(), UiState::NetworkStatus, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return;
+  }
+
+  if (_networkStatusSelected == NETWORK_ITEM_TIME) {
+    if (_wifi.isConnected()) {
+      _time.requestSync();
+      showInfoScreen(
+        "TIME",
+        "Sync dimulai",
+        UiState::NetworkStatus,
+        AppConfig::CONFIRM_RESULT_MESSAGE_MS
+      );
+    } else {
+      showInfoScreen(
+        "TIME",
+        _time.statusText(),
+        UiState::NetworkStatus,
+        AppConfig::CONFIRM_RESULT_MESSAGE_MS
+      );
+    }
+    return;
+  }
+
+  if (_networkStatusSelected == NETWORK_ITEM_DATE) {
+    String date = _time.dateString();
+    showInfoScreen(
+      "DATE",
+      date.c_str(),
+      UiState::NetworkStatus,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return;
+  }
+
+  if (_networkStatusSelected == NETWORK_ITEM_RESET) {
+    showActionConfirm(
+      PendingAction::ResetWifi,
+      "RESET WIFI",
+      "Hapus WiFi lama?"
+    );
+  }
+}
+
+void AppController::publishMqttMonitoring() {
+  if (!_mqttEnabled || !_cloud.isConnected()) {
+    return;
+  }
+
+  if (millis() - _lastMqttMonitorPublish < AppConfig::MQTT_MONITOR_INTERVAL_MS) {
+    return;
+  }
+
+  _lastMqttMonitorPublish = millis();
+
+  MqttMonitoringSnapshot snapshot;
+  snapshot.marlinStatus = marlinStatusText();
+  snapshot.timeStatus = _time.statusText();
+  snapshot.time = _time.timeString();
+  snapshot.date = _time.dateString();
+  snapshot.ssid = _wifi.ssid();
+  snapshot.ipAddress = _wifi.ipAddress();
+  snapshot.mqttLink = _cloud.isConnected() ? "CONNECTED" : "DISCONNECTED";
+  snapshot.homeX = _homeXStatus;
+  snapshot.homeY = _homeYStatus;
+  snapshot.homeZ = _homeZStatus;
+  // Nilai awal 0 hanya untuk uji koneksi MQTT; nanti diganti dari respons M114 Marlin.
+  snapshot.posX = _posX;
+  snapshot.posY = _posY;
+  snapshot.posZ = _posZ;
+  snapshot.sdReady = _sdCard.isReady();
+
+  _cloud.publishMonitoring(snapshot);
 }
 
 bool AppController::toggleSpindle() {
@@ -424,6 +1018,7 @@ void AppController::requestMachineFeedrateStatus(bool force) {
 
   Serial1.println("M203");
   _lastM203Request = millis();
+  _lastMarlinStatusPoll = _lastM203Request;
 }
 
 void AppController::parseMachineFeedrateStatus(const String &line) {
@@ -456,6 +1051,7 @@ void AppController::requestMachineGeometryStatus(bool force) {
 
   Serial1.println("M115");
   _lastM115Request = millis();
+  _lastMarlinStatusPoll = _lastM115Request;
 }
 
 void AppController::parseMachineGeometryStatus(const String &line) {
@@ -496,6 +1092,7 @@ void AppController::requestHomeSensorStatus(bool force) {
 
   Serial1.println("M119");
   _lastM119Request = millis();
+  _lastMarlinStatusPoll = _lastM119Request;
 }
 
 void AppController::parseHomeSensorStatus(const String &line) {
@@ -507,7 +1104,7 @@ void AppController::parseHomeSensorStatus(const String &line) {
     return;
   }
 
-  String status = (lower.indexOf("triggered") != -1) ? "TRIG" : "OPEN";
+  String status = (lower.indexOf("triggered") != -1) ? "TRIGGER" : "OPEN";
   bool changed = false;
 
   if (lower.startsWith("x_min:") || lower.startsWith("x_max:")) {
@@ -520,6 +1117,59 @@ void AppController::parseHomeSensorStatus(const String &line) {
     changed = _homeZStatus != status;
     _homeZStatus = status;
   }
+
+  if (changed && _uiState == UiState::MachineStatus) {
+    showMachineStatusScreen();
+  }
+}
+
+void AppController::requestSoftEndstopStatus(bool force) {
+  if (!force && millis() - _lastM211Request < AppConfig::MACHINE_STATUS_POLL_MS) {
+    return;
+  }
+
+  Serial1.println("M211");
+  _lastM211Request = millis();
+  _lastMarlinStatusPoll = _lastM211Request;
+}
+
+void AppController::parseSoftEndstopStatus(const String &line) {
+  String lower = line;
+  lower.trim();
+  lower.toLowerCase();
+
+  bool looksLikeSoftEndstop =
+    lower.indexOf("m211") != -1 ||
+    lower.indexOf("soft endstop") != -1;
+
+  if (!looksLikeSoftEndstop) {
+    return;
+  }
+
+  bool parsed = false;
+  bool enabled = _softEndstopEnabled;
+
+  if (lower.indexOf("s1") != -1 ||
+      lower.indexOf(": on") != -1 ||
+      lower.endsWith(" on") ||
+      lower.endsWith(":on")) {
+    enabled = true;
+    parsed = true;
+  } else if (lower.indexOf("s0") != -1 ||
+             lower.indexOf(": off") != -1 ||
+             lower.endsWith(" off") ||
+             lower.endsWith(":off")) {
+    enabled = false;
+    parsed = true;
+  }
+
+  if (!parsed) {
+    return;
+  }
+
+  bool changed = !_softEndstopLoaded || _softEndstopEnabled != enabled;
+  _softEndstopEnabled = enabled;
+  _softEndstopLoaded = true;
 
   if (changed && _uiState == UiState::MachineStatus) {
     showMachineStatusScreen();
@@ -539,17 +1189,22 @@ bool AppController::loadSdFileList(const String &directory) {
     return false;
   }
 
-  std::vector<SdCardEntry> entries = _sdCard.listEntries(_currentSdDirectory.c_str(), 50, true);
+  std::vector<SdCardEntry> entries = _sdCard.listEntries(_currentSdDirectory.c_str(), 100, true);
+  std::vector<SdCardEntry> parentEntries;
+  std::vector<SdCardEntry> folderEntries;
+  std::vector<SdCardEntry> fileEntries;
+
   for (const SdCardEntry &entry : entries) {
     if (isIgnoredSdBrowserEntry(entry.name)) {
       continue;
     }
 
     if (entry.isDirectory) {
-      String label = entry.name == ".." ? ".." : "[" + entry.name + "]";
-      _fileList.push_back(label);
-      _fileListPaths.push_back(entry.path);
-      _fileListIsDirectory.push_back(true);
+      if (entry.name == "..") {
+        parentEntries.push_back(entry);
+      } else {
+        folderEntries.push_back(entry);
+      }
       continue;
     }
 
@@ -557,10 +1212,25 @@ bool AppController::loadSdFileList(const String &directory) {
       continue;
     }
 
-    _fileList.push_back(entry.name);
-    _fileListPaths.push_back(entry.path);
-    _fileListIsDirectory.push_back(false);
+    fileEntries.push_back(entry);
   }
+
+  std::sort(folderEntries.begin(), folderEntries.end(), entryNameLess);
+  std::sort(fileEntries.begin(), fileEntries.end(), entryNameLess);
+
+  auto appendEntry = [this](const SdCardEntry &entry) {
+    String label = entry.isDirectory
+      ? (entry.name == ".." ? ".." : "[" + entry.name + "]")
+      : entry.name;
+
+    _fileList.push_back(label);
+    _fileListPaths.push_back(entry.path);
+    _fileListIsDirectory.push_back(entry.isDirectory);
+  };
+
+  for (const SdCardEntry &entry : parentEntries) appendEntry(entry);
+  for (const SdCardEntry &entry : folderEntries) appendEntry(entry);
+  for (const SdCardEntry &entry : fileEntries) appendEntry(entry);
 
   return true;
 }
@@ -641,6 +1311,8 @@ void AppController::dismissInfoScreen() {
     showCurrentFileListPage();
   } else if (_uiState == UiState::MachineStatus) {
     showMachineStatusScreen();
+  } else if (_uiState == UiState::NetworkStatus) {
+    showNetworkStatusScreen();
   } else {
     _uiState = UiState::Menu;
     _menu.redraw();
@@ -681,6 +1353,10 @@ void AppController::cancelActionConfirm() {
     showStandbyScreen();
   } else if (_uiState == UiState::FileList) {
     showCurrentFileListPage();
+  } else if (_uiState == UiState::MachineStatus) {
+    showMachineStatusScreen();
+  } else if (_uiState == UiState::NetworkStatus) {
+    showNetworkStatusScreen();
   } else {
     _menu.redraw();
   }
@@ -718,6 +1394,75 @@ void AppController::executeConfirmedAction() {
 
   if (action == PendingAction::RepeatJob) {
     repeatSelectedJob(UiState::Standby);
+    return;
+  }
+
+  if (action == PendingAction::SpindleToggle) {
+    bool changed = toggleSpindle();
+    if (changed) {
+      showInfoScreen(
+        "SPINDLE",
+        _spindleOn ? "Spindle ON" : "Spindle OFF",
+        returnState,
+        AppConfig::CONFIRM_RESULT_MESSAGE_MS
+      );
+    }
+    return;
+  }
+
+  if (action == PendingAction::ToggleWifi) {
+    bool nextState = !_wifiEnabled;
+    setWifiEnabled(nextState);
+    const bool wifiConnected = _wifi.isConnected();
+    const char *wifiTitle = "WIFI";
+    const char *wifiMessage = "WiFi OFF";
+    if (nextState) {
+      wifiTitle = wifiConnected ? "WIFI" : "WiFi gagal";
+      wifiMessage = wifiConnected ? "WiFi terkoneksi !!!" : "terkoneksi !!!";
+    }
+    showInfoScreen(
+      wifiTitle,
+      wifiMessage,
+      UiState::NetworkStatus,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return;
+  }
+
+  if (action == PendingAction::ToggleMqtt) {
+    bool nextState = !_mqttEnabled;
+    setMqttEnabled(nextState);
+    String mqttMessage = "MQTT OFF";
+    if (_mqttEnabled) {
+      mqttMessage = _cloud.isConnected() ? "MQTT CONNECTED" : String("LINK ") + _cloud.statusText();
+    }
+    showInfoScreen(
+      "MQTT",
+      mqttMessage.c_str(),
+      UiState::NetworkStatus,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
+    return;
+  }
+
+  if (action == PendingAction::ResetWifi) {
+    const bool keepMqttEnabled = _mqttEnabled;
+    _cloud.disconnect();
+    _wifi.resetSettings();
+    _time.update(false);
+    _wifiEnabled = true;
+    _mqttEnabled = keepMqttEnabled;
+    resetMqttSettingsToDefaults();
+    saveNetworkSettings();
+    logNetworkSettings("reset");
+    _networkStarted = false;
+    _mqttStarted = false;
+    showInfoScreen(
+      "RESET WIFI",
+      "Restart untuk portal",
+      returnState,
+      AppConfig::CONFIRM_RESULT_MESSAGE_MS
+    );
     return;
   }
 
@@ -806,11 +1551,13 @@ void AppController::redrawCurrentConfirmation() {
 void AppController::begin() {
   activeApp = this;
   beginSerial();
+  _time.begin();
   beginDisplay();
   beginInput();
   beginStorage();
+  loadNetworkSettings();
 
-  if (AppConfig::ENABLE_NETWORK) {
+  if (_wifiEnabled) {
     beginNetwork();
   }
 }
@@ -856,18 +1603,7 @@ int AppController::computeProgress() const {
 }
 
 String AppController::getLocalTimeString() const {
-  if (!_networkStarted) {
-    return String();
-  }
-
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo, 10)) {
-    // Jika NTP belum sinkron, return string kosong agar jam tidak muncul
-    return String("");
-  }
-  char timeStr[6]; // HH:MM
-  snprintf(timeStr, sizeof(timeStr), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-  return String(timeStr);
+  return _time.timeString();
 }
 
 void AppController::update() {
@@ -922,10 +1658,9 @@ void AppController::updateMarlinCommunication() {
     _uiState == UiState::SetOrigin &&
     AppConfig::ENABLE_SET_ORIGIN_CONTROL;
   bool machineStatusActive = _uiState == UiState::MachineStatus;
-
-  if (AppConfig::UI_DEVELOPMENT_MODE && !setOriginControlActive && !machineStatusActive) {
-    return;
-  }
+  bool standbyMonitorActive =
+    _uiState == UiState::Standby &&
+    AppConfig::ENABLE_MARLIN_STATUS_MONITOR;
 
   // 1. Baca data masuk dari Marlin
   while (Serial1.available()) {
@@ -936,11 +1671,21 @@ void AppController::updateMarlinCommunication() {
     }
   }
 
-  // 2. Kirim permintaan posisi (M114) setiap 500ms jika sedang standby atau jog
-  if (_uiState == UiState::Standby || _uiState == UiState::SetOrigin) {
-    if (millis() - _lastM114Request > 500) {
+  if (AppConfig::UI_DEVELOPMENT_MODE &&
+      !setOriginControlActive &&
+      !machineStatusActive &&
+      !standbyMonitorActive) {
+    return;
+  }
+
+  // 2. Kirim permintaan posisi (M114) berkala saat standby/jog.
+  if ((_uiState == UiState::Standby &&
+       (!AppConfig::UI_DEVELOPMENT_MODE || AppConfig::ENABLE_MARLIN_STATUS_MONITOR)) ||
+      _uiState == UiState::SetOrigin) {
+    if (millis() - _lastM114Request > AppConfig::MARLIN_STATUS_POLL_MS) {
       Serial1.println("M114");
       _lastM114Request = millis();
+      _lastMarlinStatusPoll = _lastM114Request;
     }
   }
 
@@ -952,13 +1697,33 @@ void AppController::updateMarlinCommunication() {
       requestMachineGeometryStatus();
     }
     requestHomeSensorStatus();
+    requestSoftEndstopStatus();
+  }
+
+  if ((_uiState == UiState::Standby || _uiState == UiState::MachineStatus) &&
+      millis() - _lastStatusScreenRefresh > AppConfig::MARLIN_STATUS_SCREEN_REFRESH_MS) {
+    _lastStatusScreenRefresh = millis();
+    if (_uiState == UiState::Standby) {
+      showStandbyScreen();
+    } else {
+      showMachineStatusScreen();
+    }
   }
 }
 
 void AppController::parseMarlinResponse(const String &line) {
+  bool wasResponding = isMarlinResponding();
+  _lastMarlinResponseMs = millis();
+  _marlinEverResponded = true;
+
   parseMachineFeedrateStatus(line);
   parseMachineGeometryStatus(line);
   parseHomeSensorStatus(line);
+  parseSoftEndstopStatus(line);
+
+  if (!wasResponding && _uiState == UiState::MachineStatus) {
+    showMachineStatusScreen();
+  }
 
   // Format standar Marlin M114: "X:0.00 Y:0.00 Z:0.00 E:0.00 Count X:0 Y:0 Z:0"
   if (line.indexOf("X:") != -1 && line.indexOf("Y:") != -1 && line.indexOf("Z:") != -1) {
@@ -1066,6 +1831,14 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
     return;
   }
 
+  if (_uiState == UiState::NetworkStatus && buttonNumber == (uint8_t)PinConfig::BTN8) {
+    _uiState = UiState::Menu;
+    if (!popMenuState()) {
+      showMainMenuScreen(3);
+    }
+    return;
+  }
+
   if (isConfirmationState()) {
     if (buttonNumber == (uint8_t)PinConfig::BTN7) {
       // Tombol ENTER fisik selalu berarti Yes.
@@ -1121,10 +1894,6 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
     return;
   }
 
-  // Publikasikan event ke cloud jika tersedia
-  if (_networkStarted) {
-    _cloud.publishButtonEvent(buttonNumber);
-  }
 }
 
 void AppController::handleJog(uint8_t pin, float distance) {
@@ -1183,7 +1952,9 @@ void AppController::updateJogDisplay() {
     mid,
     bot,
     nullptr,
-    "ENTER=SET BACK=EXIT",
+    AppConfig::ENABLE_SOFT_ENDSTOP_ON_SET_ORIGIN
+      ? "ENT=SET+SE BACK=EXIT"
+      : "ENTER=SET BACK=EXIT",
     -1,
     nullptr
   );
@@ -1206,17 +1977,34 @@ void AppController::confirmSetOrigin(UiState returnState) {
   if (AppConfig::ENABLE_SET_ORIGIN_CONTROL) {
     Serial1.println("M400");
     Serial1.println("G92 X0 Y0 Z0");
+
+    if (AppConfig::ENABLE_SOFT_ENDSTOP_ON_SET_ORIGIN) {
+      Serial1.println("M211 S1");
+      _softEndstopEnabled = true;
+      _softEndstopLoaded = true;
+      _lastM211Request = millis();
+      _lastMarlinStatusPoll = _lastM211Request;
+    }
   }
 
   _posX = 0.0f;
   _posY = 0.0f;
   _posZ = 0.0f;
-  showInfoScreen(
-    "SET ORIGIN",
-    AppConfig::ENABLE_SET_ORIGIN_CONTROL ? "Origin disimpan" : "Simulasi disimpan",
-    returnState,
-    AppConfig::CONFIRM_RESULT_MESSAGE_MS
-  );
+
+  const char *resultTitle = "Set Origin: simulasi";
+  const char *resultMessage = "SoftEnd: OFF";
+  if (AppConfig::ENABLE_SET_ORIGIN_CONTROL) {
+    resultTitle = "Set Origin: selesai";
+    resultMessage = AppConfig::ENABLE_SOFT_ENDSTOP_ON_SET_ORIGIN
+      ? "SoftEnd: ON"
+      : "SoftEnd: OFF";
+  }
+
+  _infoReturnState = returnState;
+  _infoShownAt = millis();
+  _infoAutoCloseMs = AppConfig::CONFIRM_RESULT_MESSAGE_MS;
+  _uiState = UiState::Info;
+  _lcd.showCenteredMessage(resultTitle, resultMessage);
 }
 
 void AppController::processSelectAction() {
@@ -1264,27 +2052,22 @@ void AppController::processSelectAction() {
       return;
     }
 
-    if (choice == "Machine Ctrl & Stat" || choice == "Machine Control") {
+    if (choice == "Machine Ctrl&Status") {
       pushMenuState(items, sel);
       _machineFeedrateEditing = false;
       _machineWorkAreaEditing = false;
       _machineStatusSelected = 0;
       _machineStatusOffset = 0;
-      _lastM203Request = 0;
-      _lastM115Request = 0;
-      _lastM119Request = 0;
       showMachineStatusScreen();
-      requestMachineFeedrateStatus(true);
-      requestMachineGeometryStatus(true);
-      requestHomeSensorStatus(true);
+      refreshMachineStatus();
       return;
     }
 
     if (choice == "Network") {
-      showSubMenu(
-        "NETWORK",
-        {"Connection Status", "IP Address", "Reset WiFi"}
-      );
+      pushMenuState(items, sel);
+      _networkStatusSelected = 0;
+      _networkStatusOffset = 0;
+      showNetworkStatusScreen();
       return;
     }
 
@@ -1376,6 +2159,11 @@ void AppController::processSelectAction() {
 
   if (_uiState == UiState::MachineStatus) {
     handleMachineStatusSelect();
+    return;
+  }
+
+  if (_uiState == UiState::NetworkStatus) {
+    handleNetworkStatusSelect();
     return;
   }
 
@@ -1473,12 +2261,12 @@ void AppController::onEncoderTurned(int8_t direction) {
         : (int)AppConfig::MACHINE_FEEDRATE_STEP_MM_S;
       int delta = direction > 0 ? step : -step;
 
-      if (_machineStatusSelected == 1) {
+      if (_machineStatusSelected == MACHINE_ITEM_FEED_XY) {
         _machineFeedrateXY = clampFeedrate(
           (int)_machineFeedrateXY + delta,
           AppConfig::MACHINE_FEEDRATE_MAX_MM_S
         );
-      } else if (_machineStatusSelected == 2) {
+      } else if (_machineStatusSelected == MACHINE_ITEM_FEED_Z) {
         _machineFeedrateZ = clampFeedrate(
           (int)_machineFeedrateZ + delta,
           AppConfig::MACHINE_FEEDRATE_MAX_MM_S
@@ -1496,19 +2284,19 @@ void AppController::onEncoderTurned(int8_t direction) {
         : (int)AppConfig::MACHINE_WORK_AREA_STEP_MM;
       int delta = direction > 0 ? step : -step;
 
-      if (_machineStatusSelected == 3) {
+      if (_machineStatusSelected == MACHINE_ITEM_AREA_X) {
         _machineWorkAreaX = clampUnsigned(
           (int)_machineWorkAreaX + delta,
           AppConfig::MACHINE_WORK_AREA_MIN_MM,
           AppConfig::MACHINE_WORK_AREA_MAX_MM
         );
-      } else if (_machineStatusSelected == 4) {
+      } else if (_machineStatusSelected == MACHINE_ITEM_AREA_Y) {
         _machineWorkAreaY = clampUnsigned(
           (int)_machineWorkAreaY + delta,
           AppConfig::MACHINE_WORK_AREA_MIN_MM,
           AppConfig::MACHINE_WORK_AREA_MAX_MM
         );
-      } else if (_machineStatusSelected == 5) {
+      } else if (_machineStatusSelected == MACHINE_ITEM_AREA_Z) {
         _machineWorkAreaZ = clampUnsigned(
           (int)_machineWorkAreaZ + delta,
           AppConfig::MACHINE_WORK_AREA_MIN_MM,
@@ -1535,18 +2323,26 @@ void AppController::onEncoderTurned(int8_t direction) {
     return;
   }
 
-  if (_networkStarted) {
-    _cloud.publishEncoderEvent(direction);
+  if (_uiState == UiState::NetworkStatus) {
+    const size_t itemCount = networkStatusItems().size();
+    if (itemCount > 0) {
+      if (direction > 0) {
+        _networkStatusSelected = (_networkStatusSelected + 1) % itemCount;
+      } else {
+        _networkStatusSelected = (_networkStatusSelected == 0)
+          ? itemCount - 1
+          : _networkStatusSelected - 1;
+      }
+    }
+
+    showNetworkStatusScreen();
+    return;
   }
+
 }
 
 void AppController::onEncoderPressed() {
   Serial.println("Encoder digunakan sebagai OK / Select");
-
-  // Publish event to cloud if available
-  if (_networkStarted) {
-    _cloud.publishStatus("input", "encoder_pressed");
-  }
 
   // Perform unified select action (same as BTN7)
   processSelectAction();
@@ -1686,26 +2482,8 @@ void AppController::beginStorage() {
 
 
 void AppController::beginNetwork() {
-  bool wifiReady = _wifi.begin();
-
-  if (wifiReady) {
-    // Initialize cloud MQTT client
-    _networkStarted = _cloud.begin();
-    // Configure NTP time so getLocalTime() can work for display. Use pool.ntp.org
-    configTime(0, 0, "pool.ntp.org", "time.google.com");
-    // Try to obtain time briefly; do not block long
-    struct tm timeinfo;
-    unsigned long start = millis();
-    while (millis() - start < 3000) {
-      if (getLocalTime(&timeinfo)) {
-        // time acquired
-        break;
-      }
-      delay(200);
-    }
-  } else {
-    _networkStarted = false;
-  }
+  loadNetworkSettings();
+  startNetworkFromSettings();
 }
 
 void AppController::runSdCardDiagnostics() {
@@ -1722,24 +2500,36 @@ void AppController::updateInput() {
 }
 
 void AppController::updateNetwork() {
-  if (!_networkStarted) {
+  if (!_wifiEnabled) {
+    _time.update(false);
     return;
   }
 
   _wifi.update();
 
-  if (_wifi.isConnected()) {
-    _cloud.update();
-  }
-
-  if (millis() - _lastHeartbeat < 5000) {
+  if (!_wifi.isConnected()) {
+    _time.update(false);
+    _networkStarted = false;
     return;
   }
 
-  _lastHeartbeat = millis();
+  _networkStarted = true;
+  _time.update(true);
 
-  if (_cloud.isConnected()) {
-    _cloud.publishStatus("idle", "Heartbeat");
+  if (_uiState == UiState::NetworkStatus &&
+      millis() - _lastStatusScreenRefresh > AppConfig::MARLIN_STATUS_SCREEN_REFRESH_MS) {
+    _lastStatusScreenRefresh = millis();
+    showNetworkStatusScreen();
+  }
+
+  if (_mqttEnabled && !_mqttStarted) {
+    _cloud.begin();
+    _mqttStarted = true;
+  }
+
+  if (_mqttEnabled && _mqttStarted) {
+    _cloud.update();
+    publishMqttMonitoring();
   }
 }
 

@@ -13,6 +13,13 @@ namespace {
   constexpr uint8_t SPLASH_LOGO_H = Symbols::BootLogo::HEIGHT;  // 40
   constexpr uint8_t SPLASH_LOGO_X = 3;
   constexpr uint8_t SPLASH_LOGO_Y = 4;
+
+  int16_t centerX(U8G2_ST7920_128X64_F_SW_SPI *lcd, const String &text) {
+    int16_t width = lcd->getStrWidth(text.c_str());
+    int16_t x = (128 - width) / 2;
+    return x < 0 ? 0 : x;
+  }
+
 }
 
 
@@ -94,6 +101,41 @@ void LcdHandler::showMessage(const char *title, const char *message) {
   _lcd->drawStr(0, 10, fitText(title, LCD_MAX_CHARS).c_str());
   _lcd->drawHLine(0, 13, 128);
   _lcd->drawStr(0, 30, fitText(message, LCD_MAX_CHARS).c_str());
+  _lcd->sendBuffer();
+}
+
+void LcdHandler::showCenteredMessage(const char *title, const char *message) {
+  if (_lcd == nullptr) {
+    return;
+  }
+
+  String titleLine = fitText(title, LCD_MAX_CHARS);
+  String messageLine = fitText(message, LCD_MAX_CHARS);
+
+  _lcd->clearBuffer();
+  _lcd->setFont(u8g2_font_6x10_tf);
+  _lcd->drawStr(centerX(_lcd, titleLine), 28, titleLine.c_str());
+  _lcd->drawStr(centerX(_lcd, messageLine), 42, messageLine.c_str());
+  _lcd->sendBuffer();
+}
+
+void LcdHandler::showWifiSetup(const char *apName) {
+  if (_lcd == nullptr) {
+    return;
+  }
+
+  String titleLine = "WiFi Setup";
+  String line1 = "Sambungkan WiFi";
+  String line2 = "dengan Nama:";
+  String apLine = fitText(apName, LCD_MAX_CHARS);
+
+  _lcd->clearBuffer();
+  _lcd->setFont(u8g2_font_6x10_tf);
+  _lcd->drawStr(centerX(_lcd, titleLine), 10, titleLine.c_str());
+  _lcd->drawHLine(0, 13, 128);
+  _lcd->drawStr(centerX(_lcd, line1), 28, line1.c_str());
+  _lcd->drawStr(centerX(_lcd, line2), 40, line2.c_str());
+  _lcd->drawStr(centerX(_lcd, apLine), 58, apLine.c_str());
   _lcd->sendBuffer();
 }
 
@@ -232,15 +274,19 @@ void LcdHandler::showMenu(const char *title, const std::vector<String> &items, s
   _lcd->drawStr(0, 9, fitText(title, LCD_MAX_CHARS).c_str());
   _lcd->drawHLine(0, 12, 128);
 
+  uint8_t baselineY = 22;
   for (uint8_t row = 0; row < 5; row++) {
     size_t itemIndex = offset + row;
     if (itemIndex >= items.size()) {
       break;
     }
 
+    if (baselineY > 62) {
+      break;
+    }
+
     if (itemIndex == selected) {
       // Inverse highlight: draw filled box then render text in draw color 0
-      uint8_t baselineY = 22 + (row * LCD_ROW_HEIGHT);
       int boxTop = (int)baselineY - 8; // adjust so box covers text height
       if (boxTop < 0) boxTop = 0;
       _lcd->drawBox(0, boxTop, 128, LCD_ROW_HEIGHT);
@@ -250,8 +296,10 @@ void LcdHandler::showMenu(const char *title, const std::vector<String> &items, s
       // Restore draw color
       _lcd->setDrawColor(1);
     } else {
-      _lcd->drawStr(10, 22 + (row * LCD_ROW_HEIGHT), fitText(items[itemIndex], LCD_MAX_CHARS - 1).c_str());
+      _lcd->drawStr(10, baselineY, fitText(items[itemIndex], LCD_MAX_CHARS - 1).c_str());
     }
+
+    baselineY += LCD_ROW_HEIGHT;
   }
 
   _lcd->sendBuffer();

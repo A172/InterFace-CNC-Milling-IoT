@@ -5,15 +5,43 @@
 #include <PubSubClient.h>
 #include <WiFiClient.h>
 
+struct MqttMonitoringSnapshot {
+  String marlinStatus;
+  String timeStatus;
+  String time;
+  String date;
+  String ssid;
+  String ipAddress;
+  String mqttLink;
+  String homeX;
+  String homeY;
+  String homeZ;
+  float posX = 0.0f;
+  float posY = 0.0f;
+  float posZ = 0.0f;
+  bool sdReady = false;
+};
+
 class CloudMqtt {
   public:
     bool begin();
+    void configure(
+      const String &broker,
+      uint16_t port,
+      const String &topicPrefix,
+      const String &user,
+      const String &password
+    );
     void update();
     bool isConnected();
+    int state();
+    String statusText();
+    void disconnect();
+    String broker() const;
+    uint16_t port() const;
+    String topicPrefix() const;
 
-    void publishStatus(const String &state, const String &detail);
-    void publishButtonEvent(uint8_t buttonNumber);
-    void publishEncoderEvent(int8_t direction);
+    void publishMonitoring(const MqttMonitoringSnapshot &snapshot);
     void handleMessage(char *topic, byte *payload, unsigned int length);
 
   private:
@@ -21,10 +49,28 @@ class CloudMqtt {
     PubSubClient _mqttClient;
     String _clientId;
     String _baseTopic;
+    String _broker;
+    String _topicPrefix;
+    String _user;
+    String _password;
+    uint16_t _port = 0;
+    int _lastState = MQTT_DISCONNECTED;
     unsigned long _lastReconnectAttempt = 0;
+    unsigned long _lastPositionPublish = 0;
+    unsigned long _lastTimePublish = 0;
+    bool _networkPublished = false;
+    String _lastNetworkPayload;
+    String _lastTimePayload;
+    String _lastAlarmPayload;
 
+    void ensureConfigured();
+    bool brokerReachable();
     bool connect();
-    String makePayload(const String &state, const String &detail) const;
+    bool publishJson(const String &topicSuffix, const String &payload, bool retained = false);
+    void publishNetwork(const MqttMonitoringSnapshot &snapshot, bool force = false);
+    void publishPosition(const MqttMonitoringSnapshot &snapshot, unsigned long now);
+    void publishTime(const MqttMonitoringSnapshot &snapshot, unsigned long now);
+    void publishAlarm(const MqttMonitoringSnapshot &snapshot);
 };
 
 #endif

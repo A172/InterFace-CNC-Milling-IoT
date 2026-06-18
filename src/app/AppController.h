@@ -20,6 +20,7 @@ enum class JobSource {
 #include "../network/CloudMqtt.h"
 #include "../network/WifiPortal.h"
 #include "../storage/SdCardReader.h"
+#include "../time/TimeManager.h"
 #include "../display/Menu.h"
 
 class AppController {
@@ -79,7 +80,8 @@ class AppController {
       ConfirmSelect,
       ConfirmAction,
       SetOrigin,
-      MachineStatus
+      MachineStatus,
+      NetworkStatus
     };
     UiState _uiState = UiState::Boot;
 
@@ -105,7 +107,11 @@ class AppController {
     None,
     HomeAll,
     SetOrigin,
-    RepeatJob
+    RepeatJob,
+    SpindleToggle,
+    ToggleWifi,
+    ToggleMqtt,
+    ResetWifi
   };
   PendingAction _pendingAction = PendingAction::None;
   UiState _confirmReturnState = UiState::Menu;
@@ -131,6 +137,28 @@ class AppController {
   void showMachineStatusScreen();
   std::vector<String> machineStatusItems() const;
   void handleMachineStatusSelect();
+  void showNetworkStatusScreen();
+  std::vector<String> networkStatusItems();
+  void handleNetworkStatusSelect();
+  void loadNetworkSettings();
+  void saveNetworkSettings();
+  void startNetworkFromSettings();
+  void stopNetworkRuntime();
+  void setWifiEnabled(bool enabled);
+  void setMqttEnabled(bool enabled);
+  void applyMqttSettings();
+  void resetMqttSettingsToDefaults();
+  void logNetworkSettings(const char *source) const;
+  WifiPortalMqttSettings currentMqttPortalSettings() const;
+  void updateMqttSettingsFromPortal(const WifiPortalMqttSettings &settings);
+  String mqttBrokerInfo() const;
+  void refreshMachineStatus();
+  bool isMarlinResponding() const;
+  String currentUiStateName() const;
+  String softEndstopStatusText() const;
+  String marlinStatusText() const;
+  String standbyMarlinStatusText() const;
+  void publishMqttMonitoring();
   bool toggleSpindle();
   bool applyMachineFeedrate();
   void requestMachineFeedrateStatus(bool force = false);
@@ -139,6 +167,8 @@ class AppController {
   void parseMachineGeometryStatus(const String &line);
   void requestHomeSensorStatus(bool force = false);
   void parseHomeSensorStatus(const String &line);
+  void requestSoftEndstopStatus(bool force = false);
+  void parseSoftEndstopStatus(const String &line);
   bool loadSdFileList(const String &directory);
   void openSdFileList(const String &directory = "/");
   void showCurrentFileListPage();
@@ -164,21 +194,35 @@ class AppController {
     // Modul jaringan dan cloud.
     WifiPortal _wifi;
     CloudMqtt _cloud;
+    TimeManager _time;
 
     // Status runtime aplikasi.
-    unsigned long _lastHeartbeat = 0;
+    unsigned long _lastMqttMonitorPublish = 0;
     unsigned long _infoShownAt = 0;
     unsigned long _infoAutoCloseMs = 0;
     bool _inputStarted = false;
     bool _storageStarted = false;
     bool _networkStarted = false;
+    bool _mqttStarted = false;
+    bool _wifiEnabled = AppConfig::DEFAULT_WIFI_ENABLED;
+    bool _mqttEnabled = AppConfig::DEFAULT_MQTT_ENABLED;
+    String _mqttBroker = AppConfig::MQTT_BROKER;
+    uint16_t _mqttPort = AppConfig::MQTT_PORT;
+    String _mqttTopicPrefix = AppConfig::MQTT_TOPIC_PREFIX;
+    String _mqttUser = AppConfig::MQTT_USER;
+    String _mqttPassword = AppConfig::MQTT_PASS;
     bool _spindleOn = false;
     bool _machineFeedrateEditing = false;
     bool _machineFeedrateLoaded = false;
     bool _machineWorkAreaEditing = false;
     bool _machineWorkAreaLoaded = false;
+    bool _softEndstopLoaded = false;
+    bool _softEndstopEnabled = false;
+    bool _marlinEverResponded = false;
     size_t _machineStatusSelected = 0;
     size_t _machineStatusOffset = 0;
+    size_t _networkStatusSelected = 0;
+    size_t _networkStatusOffset = 0;
     unsigned int _machineFeedrateXY = 0;
     unsigned int _machineFeedrateZ = 0;
     unsigned int _machineWorkAreaX = 0;
@@ -193,7 +237,7 @@ class AppController {
   String computeJobName() const;
   // Return progress percent (0-100) or -1 if no active job
   int computeProgress() const;
-  // Return current local time as HH:MM or nullptr/empty if not available
+  // Return current local time as HH:MM:SS or empty if not available.
   String getLocalTimeString() const;
 
   private:
@@ -201,6 +245,10 @@ class AppController {
     unsigned long _lastM119Request = 0;
     unsigned long _lastM203Request = 0;
     unsigned long _lastM115Request = 0;
+    unsigned long _lastM211Request = 0;
+    unsigned long _lastMarlinResponseMs = 0;
+    unsigned long _lastMarlinStatusPoll = 0;
+    unsigned long _lastStatusScreenRefresh = 0;
     void updateMarlinCommunication();
     void parseMarlinResponse(const String &line);
 

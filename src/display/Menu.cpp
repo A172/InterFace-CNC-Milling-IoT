@@ -5,14 +5,19 @@ Menu::Menu(LcdHandler &lcd)
   : _lcd(lcd) {
 }
 
-void Menu::showStandby(float x, float y, float z, const char *eta, const char *jobName, int progress, const char *timeStr) {
+void Menu::showStandby(float x, float y, float z, const char *eta, const char *jobName, int progress, const char *timeStr, const char *machineStatus) {
   char top[32];
   char mid[32];
   char bottom[32];
 
   // Baris 1: Status Mesin
   // Jika ada job, status berubah jadi RUNNING
-  snprintf(top, sizeof(top), (progress >= 0) ? "RUNNING" : "IDLE");
+  String topLine = (progress >= 0) ? "RUNNING" : "IDLE";
+  if (machineStatus != nullptr && machineStatus[0] != '\0') {
+    topLine += " M:";
+    topLine += machineStatus;
+  }
+  snprintf(top, sizeof(top), "%s", topLine.c_str());
 
   // Baris 2: Koordinat X dan Y (Gunakan spasi tetap agar angka sejajar)
   snprintf(mid, sizeof(mid), "X:%6.2f Y:%6.2f", x, y);
