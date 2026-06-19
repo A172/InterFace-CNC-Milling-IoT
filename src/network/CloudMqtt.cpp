@@ -183,6 +183,7 @@ void CloudMqtt::publishMonitoring(const MqttMonitoringSnapshot &snapshot) {
   unsigned long now = millis();
 
   publishNetwork(snapshot, !_networkPublished);
+  publishMachine(snapshot, now);
   publishPosition(snapshot, now);
   publishProgress(snapshot, now);
   publishTime(snapshot, now);
@@ -241,9 +242,11 @@ bool CloudMqtt::connect() {
   _lastState = MQTT_CONNECTED;
   _networkPublished = false;
   _lastPositionPublish = 0;
+  _lastMachinePublish = 0;
   _lastProgressPublish = 0;
   _lastTimePublish = 0;
   _lastProgressPayload = "";
+  _lastMachinePayload = "";
   _lastNetworkPayload = "";
   _lastTimePayload = "";
   _lastAlarmPayload = "";
@@ -312,13 +315,58 @@ void CloudMqtt::publishPosition(const MqttMonitoringSnapshot &snapshot, unsigned
     return;
   }
 
-  String payload = String("{\"x\":") + floatJson(snapshot.posX) +
-                   ",\"y\":" + floatJson(snapshot.posY) +
-                   ",\"z\":" + floatJson(snapshot.posZ) +
-                   ",\"unit\":\"mm\"}";
+  String payload;
+  if (snapshot.positionValid) {
+    String x = floatJson(snapshot.posX);
+    String y = floatJson(snapshot.posY);
+    String z = floatJson(snapshot.posZ);
+    payload = String("{\"x\":") + x +
+              ",\"y\":" + y +
+              ",\"z\":" + z +
+              ",\"display\":{\"x\":\"" + x +
+              "\",\"y\":\"" + y +
+              "\",\"z\":\"" + z +
+              "\"},\"unit\":\"mm\",\"valid\":true,\"source\":\"" +
+              escapeJson(snapshot.positionSource) + "\"}";
+  } else {
+    payload = String("{\"x\":null,\"y\":null,\"z\":null,") +
+              "\"display\":{\"x\":\"?\",\"y\":\"?\",\"z\":\"?\"}," +
+              "\"unit\":\"mm\",\"valid\":false,\"source\":\"" +
+              escapeJson(snapshot.positionSource) + "\"}";
+  }
 
   publishJson(MqttConfig::TOPIC_POSITION, payload, true);
   _lastPositionPublish = now;
+}
+
+void CloudMqtt::publishMachine(const MqttMonitoringSnapshot &snapshot, unsigned long now) {
+  bool connected = snapshot.marlinStatus == "CONNECTED";
+  bool feedrateValid = connected && snapshot.feedrateValid;
+  String spindle = connected ? (snapshot.spindleOn ? "ON" : "OFF") : "?";
+  String softEndstop = connected ? snapshot.softEndstop : String("?");
+  String homeX = connected ? snapshot.homeX : String("?");
+  String homeY = connected ? snapshot.homeY : String("?");
+  String homeZ = connected ? snapshot.homeZ : String("?");
+  String feedXY = feedrateValid ? String(snapshot.feedrateXY) : String("null");
+  String feedZ = feedrateValid ? String(snapshot.feedrateZ) : String("null");
+  String payload = String("{\"state\":\"") + escapeJson(snapshot.marlinStatus) +
+                   "\",\"connected\":" + (connected ? "true" : "false") +
+                   ",\"spindle\":\"" + escapeJson(spindle) +
+                   "\",\"soft_endstop\":\"" + escapeJson(softEndstop) +
+                   "\",\"feed_xy\":" + feedXY +
+                   ",\"feed_z\":" + feedZ +
+                   ",\"x_home\":\"" + escapeJson(homeX) +
+                   "\",\"y_home\":\"" + escapeJson(homeY) +
+                   "\",\"z_home\":\"" + escapeJson(homeZ) + "\"}";
+
+  if (payload == _lastMachinePayload &&
+      now - _lastMachinePublish < MqttConfig::MACHINE_INTERVAL_MS) {
+    return;
+  }
+
+  publishJson(MqttConfig::TOPIC_MACHINE, payload, true);
+  _lastMachinePayload = payload;
+  _lastMachinePublish = now;
 }
 
 void CloudMqtt::publishProgress(const MqttMonitoringSnapshot &snapshot, unsigned long now) {

@@ -20,6 +20,12 @@ namespace {
     return x < 0 ? 0 : x;
   }
 
+  int16_t centerX(U8G2_ST7920_128X64_F_SW_SPI *lcd, const char *text) {
+    int16_t width = lcd->getStrWidth(text);
+    int16_t x = (128 - width) / 2;
+    return x < 0 ? 0 : x;
+  }
+
 }
 
 
@@ -136,6 +142,66 @@ void LcdHandler::showWifiSetup(const char *apName) {
   _lcd->drawStr(centerX(_lcd, line1), 28, line1.c_str());
   _lcd->drawStr(centerX(_lcd, line2), 40, line2.c_str());
   _lcd->drawStr(centerX(_lcd, apLine), 58, apLine.c_str());
+  _lcd->sendBuffer();
+}
+
+void LcdHandler::showAbout(
+  const char *firmwareName,
+  const char *version,
+  const char *author,
+  const char *authorId,
+  const char *lastUpdated,
+  uint8_t scrollOffset
+) {
+  if (_lcd == nullptr) {
+    return;
+  }
+
+  char versionLine[24];
+  char nimLine[24];
+  char updateLine[24];
+  snprintf(versionLine, sizeof(versionLine), "Version %s", version);
+  snprintf(nimLine, sizeof(nimLine), "NIM: %s", authorId);
+  snprintf(updateLine, sizeof(updateLine), "Update: %s", lastUpdated);
+  const char *lines[] = {
+    firmwareName,
+    versionLine,
+    "Pembuat:",
+    author,
+    nimLine,
+    updateLine
+  };
+
+  _lcd->clearBuffer();
+  _lcd->setFont(u8g2_font_6x10_tf);
+
+  if (Symbols::BootLogo::USE_CUSTOM_LOGO &&
+      Symbols::BootLogo::LOGO_BITMAP != nullptr) {
+    _lcd->drawXBMP(
+      (128 - Symbols::BootLogo::WIDTH) / 2,
+      0,
+      Symbols::BootLogo::WIDTH,
+      Symbols::BootLogo::HEIGHT,
+      Symbols::BootLogo::LOGO_BITMAP
+    );
+  } else {
+    _lcd->drawFrame(
+      (128 - Symbols::BootLogo::WIDTH) / 2,
+      0,
+      Symbols::BootLogo::WIDTH,
+      Symbols::BootLogo::HEIGHT
+    );
+  }
+
+  _lcd->drawHLine(0, 41, 128);
+  _lcd->setClipWindow(0, 42, 127, 63);
+  for (uint8_t index = 0; index < 6; ++index) {
+    int16_t baseline = 52 + (index * 10) - scrollOffset;
+    if (baseline > 0 && baseline < 74) {
+      _lcd->drawStr(centerX(_lcd, lines[index]), baseline, lines[index]);
+    }
+  }
+  _lcd->setMaxClipWindow();
   _lcd->sendBuffer();
 }
 

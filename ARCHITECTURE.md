@@ -99,6 +99,7 @@ loop()
 AppController::update()
    |
    +-- updateInput()
+   +-- updateAboutScreen()
    +-- BuzzerHandler::update()
    +-- updateMarlinCommunication()
    +-- updateNetwork()
@@ -116,7 +117,8 @@ Fungsi utama:
 - Mengirim `M114` secara periodik.
 - Parse respons posisi `X`, `Y`, dan `Z`.
 - Menggunakan posisi Marlin untuk standby screen, Set Origin, dan MQTT `cnc/position`.
-- Mengirim alarm MQTT jika Marlin tidak merespons melewati timeout.
+- Menandai posisi tidak valid sampai respons `M114` diterima dan menampilkan `?` pada LCD/MQTT.
+- Mengirim alarm MQTT jika koneksi yang sebelumnya aktif menjadi `LOST` atau Marlin mengirim `ERROR`.
 
 ## MQTT Lokal
 
@@ -126,6 +128,7 @@ Topic publish utama:
 - `cnc/progress`
 - `cnc/error`
 - `cnc/position`
+- `cnc/machine`
 
 Topic subscribe receive-only:
 
@@ -151,6 +154,7 @@ UI LCD dibagi menjadi:
 - Set Origin
 - Machine Ctrl&Status
 - Network
+- About dengan logo tetap dan teks identitas bergulir
 - Dialog konfirmasi
 
 Semua alur UI dikoordinasikan oleh `AppController`.

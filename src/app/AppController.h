@@ -95,7 +95,8 @@ class AppController {
       ConfirmAction,
       SetOrigin,
       MachineStatus,
-      NetworkStatus
+      NetworkStatus,
+      About
     };
     UiState _uiState = UiState::Boot;
 
@@ -154,6 +155,9 @@ class AppController {
   void showNetworkStatusScreen();
   std::vector<String> networkStatusItems();
   void handleNetworkStatusSelect();
+  void showAboutScreen();
+  void updateAboutScreen();
+  void exitAboutScreen();
   void loadNetworkSettings();
   void saveNetworkSettings();
   void startNetworkFromSettings();
@@ -219,6 +223,10 @@ class AppController {
     unsigned long _lastMqttMonitorPublish = 0;
     unsigned long _infoShownAt = 0;
     unsigned long _infoAutoCloseMs = 0;
+    unsigned long _aboutEnteredAt = 0;
+    unsigned long _aboutLastScrollAt = 0;
+    unsigned long _aboutEndReachedAt = 0;
+    uint8_t _aboutScrollOffset = 0;
     bool _inputStarted = false;
     bool _storageStarted = false;
     bool _networkStarted = false;
@@ -241,6 +249,7 @@ class AppController {
     bool _marlinConnectionEnabled = false;
     bool _marlinEverResponded = false;
     bool _marlinErrorActive = false;
+    bool _positionValid = false;
     size_t _machineStatusSelected = 0;
     size_t _machineStatusOffset = 0;
     size_t _networkStatusSelected = 0;

@@ -4,6 +4,10 @@
 
 Firmware ini dikembangkan secara mandiri sebagai bagian dari proyek akhir D4 Teknik Elektronika Politeknik Negeri Malang.
 
+- Pengembang: Alfath Yusuf Biyono
+- NIM: 2141170132
+- Pembaruan firmware terakhir: 20/06/2026
+
 Identitas firmware disimpan terpusat di `src/config/AppConfig.h` melalui `FIRMWARE_NAME`, `FIRMWARE_VERSION`, dan `FIRMWARE_DESCRIPTION`. Identitas tersebut digunakan pada boot screen, Serial Monitor, dan menu About.
 
 ## Ringkasan Sistem
@@ -71,6 +75,8 @@ ESP32-S3 CNC Interface
 - WiFiManager untuk konfigurasi WiFi dan parameter MQTT lokal.
 - Sinkronisasi waktu NTP WIB dan penggunaan waktu internal ESP32 setelah sinkron.
 - MQTT monitoring lokal ke Mosquitto.
+- Monitoring state mesin melalui topic retained `cnc/machine`.
+- Layar About bergulir dengan logo dan identitas pengembang.
 - Feedback buzzer non-blocking untuk navigasi, job selesai, warning, dan alarm Marlin.
 
 ### Passive Buzzer
@@ -114,7 +120,7 @@ Format indikator koneksi:
 
 Teks `WiFi` dimulai sejajar di bawah label koordinat `Y`. Huruf `V` dipakai sebagai simbol centang yang kompatibel dengan font LCD. Saat progress job tampil, area indikator dipakai oleh progress bar.
 
-Nilai koordinat X/Y/Z berasal dari variabel posisi internal yang diperbarui dari respons `M114` Marlin.
+Nilai koordinat X/Y/Z hanya dianggap valid setelah respons `M114` diterima saat CNC berstatus `CONNECTED`. Jika mesin belum tersambung, standby menampilkan `?` untuk setiap koordinat.
 
 ### Main Menu
 
@@ -124,13 +130,20 @@ Menu utama berisi:
 - `Select Job`
 - `Machine Ctrl&Status`
 - `Network`
-- `Settings`
+- `About`
 
 Navigasi menu menggunakan rotary encoder. Klik rotary atau tombol Enter menjalankan item yang dipilih.
 
 ### Submenu Move & Jog
 
-Submenu ini berisi workflow gerak manual dan Set Origin. Bagian Set Origin menjadi workflow utama untuk menentukan titik nol bidang kerja.
+Submenu ini mengikuti urutan persiapan bidang kerja:
+
+1. `Home All (G28)` untuk mencari referensi home mesin.
+2. `Set Origin (G92)` untuk memosisikan spindle dan menetapkan nol material.
+
+### Home All
+
+`Home All (G28)` membuka dialog konfirmasi sebelum mengirim `G28`. Perintah hanya dikirim jika komunikasi CNC berstatus `CONNECTED` dan fitur Home aktif. Home All menggerakkan mesin menuju sensor home dan tidak menetapkan origin material.
 
 ### Set Origin
 
@@ -164,21 +177,36 @@ Menu Select Job langsung membuka browser SD card. Fitur yang tersedia:
 - Folder ditampilkan di atas file.
 - Folder dan file diurutkan berdasarkan abjad.
 - File yang dipilih disimpan sebagai job aktif.
+- Enter atau klik rotary membuka folder atau mengonfirmasi file.
+- Back kembali ke folder induk, lalu kembali ke menu utama dari root SD card.
 
 Job aktif ditampilkan kembali di standby screen sebagai `Job: nama_file`.
 
 ### Machine Ctrl&Status
 
-Menu ini digunakan untuk melihat dan mengatur status mesin yang berhubungan dengan Marlin. Item yang tersedia meliputi:
+Menu ini digunakan untuk melihat dan mengatur status mesin yang berhubungan dengan Marlin. Urutan item aktual dan fungsinya:
 
-- Status spindle.
-- Status koneksi Marlin.
-- Status soft endstop.
-- Feedrate XY.
-- Feedrate Z.
-- Ukuran area kerja X/Y/Z.
-- Sensor homing X/Y/Z.
-- Refresh status.
+1. `CNC`: menampilkan state komunikasi dan menjalankan pembacaan ulang status ketika dipilih.
+2. `Home X/Y/Z`: membaca sensor endstop melalui `M119`.
+3. `SoftEnd`: membaca status soft endstop melalui `M211`.
+4. `Spindle`: membuka konfirmasi untuk mengirim `M3` atau `M5`.
+5. `Feed XY`: membaca/mengubah feedrate maksimum X/Y melalui `M203`.
+6. `Feed Z`: membaca/mengubah feedrate maksimum Z melalui `M203`.
+7. `Area X/Y/Z`: menampilkan geometry report yang dibaca melalui `M115`.
+8. `Refresh Status`: membaca ulang seluruh parameter status yang didukung.
+
+Urutan tersebut memprioritaskan pemeriksaan komunikasi dan sensor keselamatan sebelum kontrol spindle serta parameter gerak.
+
+`Refresh Status` terlebih dahulu menandai feedrate, area kerja, soft endstop, dan sensor home sebagai belum diketahui. Jika CNC berstatus `CONNECTED`, interface kemudian meminta:
+
+- `M203` untuk feedrate maksimum X/Y/Z.
+- `M115` untuk firmware/geometry report.
+- `M119` untuk sensor home/endstop.
+- `M211` untuk soft endstop.
+
+Refresh tidak menjalankan homing, tidak menggerakkan axis, tidak mengubah origin, dan tidak me-restart Marlin. Posisi `M114` tetap diperbarui oleh polling periodik terpisah. Jika CNC belum terhubung, nilai yang belum diketahui tetap tampil `?`.
+
+Perubahan nilai `Area X/Y/Z` saat ini masih hanya mengubah nilai lokal pada interface; belum ada command Marlin yang menerapkan perubahan area kerja tersebut.
 
 Status sensor homing memakai format seperti `OPEN`, `TRIGGER`, atau `?` jika belum diketahui.
 
@@ -186,20 +214,32 @@ Status sensor homing memakai format seperti `OPEN`, `TRIGGER`, atau `?` jika bel
 
 Menu Network digunakan untuk konfigurasi dan pemantauan koneksi:
 
-- Status WiFi.
-- SSID.
-- IP ESP32.
-- Status MQTT.
-- Link MQTT.
-- Broker MQTT.
-- Nama AP setup WiFiManager.
-- Status waktu NTP.
-- Tanggal.
-- Reset WiFi.
+- `WiFi`: mengaktifkan atau menonaktifkan WiFi melalui konfirmasi.
+- `SSID`: menampilkan nama jaringan yang terhubung.
+- `IP`: menampilkan alamat IP ESP32.
+- `MQTT`: mengaktifkan atau menonaktifkan MQTT; WiFi harus aktif.
+- `Link`: menampilkan kondisi koneksi MQTT dan broker aktif.
+- `Broker`: menampilkan alamat broker dan port.
+- `AP`: menampilkan nama access point konfigurasi WiFiManager.
+- `Time`: meminta sinkronisasi NTP jika WiFi terhubung.
+- `Date`: menampilkan tanggal internal ESP32.
+- `Reset WiFi`: menghapus credential lama dan membuka kembali portal konfigurasi setelah konfirmasi.
 
 Saat WiFi setup aktif, LCD menampilkan instruksi untuk menyambungkan perangkat ke AP `CNC-Interface-Setup`.
 
 Saat `Reset WiFi` dikonfirmasi, credential lama dihapus dan portal `CNC-Interface-Setup` langsung dibuka kembali. User tidak perlu mematikan dan menyalakan toggle WiFi secara manual.
+
+### About
+
+Menu About menampilkan logo firmware di tengah atas serta informasi yang bergulir otomatis di bawahnya:
+
+- Nama firmware `AYB Interface`.
+- Versi firmware.
+- Nama pembuat `Alfath Yusuf Biyono`.
+- NIM `2141170132`.
+- Tanggal pembaruan firmware terakhir.
+
+Layar About dapat ditutup menggunakan tombol Enter, tombol Back, atau klik rotary encoder. Animasi scrolling menggunakan `millis()` dan tidak menghentikan loop utama.
 
 ### Dialog Konfirmasi
 
@@ -224,6 +264,7 @@ Topic utama yang digunakan:
 - `cnc/progress` - publish progress job; bernilai `null` dan `idle` jika job belum berjalan.
 - `cnc/error` - publish status error aktif.
 - `cnc/position` - publish posisi X/Y/Z dari Marlin.
+- `cnc/machine` - publish state CNC, spindle, soft endstop, feedrate, dan sensor home.
 
 Topic monitoring lama tetap dipertahankan agar dashboard yang sudah ada tidak rusak:
 
@@ -249,9 +290,44 @@ Contoh `cnc/position`:
   "x": 0.0,
   "y": 0.0,
   "z": 0.0,
-  "unit": "mm"
+  "display": {"x": "0.00", "y": "0.00", "z": "0.00"},
+  "unit": "mm",
+  "valid": true,
+  "source": "marlin"
 }
 ```
+
+Saat Marlin belum memberikan posisi nyata:
+
+```json
+{
+  "x": null,
+  "y": null,
+  "z": null,
+  "display": {"x": "?", "y": "?", "z": "?"},
+  "unit": "mm",
+  "valid": false,
+  "source": "unavailable"
+}
+```
+
+Contoh `cnc/machine` ketika komunikasi CNC dinonaktifkan:
+
+```json
+{
+  "state": "OFF",
+  "connected": false,
+  "spindle": "?",
+  "soft_endstop": "?",
+  "feed_xy": null,
+  "feed_z": null,
+  "x_home": "?",
+  "y_home": "?",
+  "z_home": "?"
+}
+```
+
+Jalur simulasi posisi MQTT sudah disiapkan melalui `MqttConfig::ENABLE_POSITION_SIMULATION`, tetapi default tetap `false` agar dashboard tidak menerima data palsu. Aktifkan hanya untuk pengujian terkontrol tanpa Marlin.
 
 `cnc/command` dan `cnc/gcode` pada tahap ini bersifat receive-only. Payload hanya dicetak ke Serial Monitor dengan prefix `[MQTT][COMMAND]` atau `[MQTT][GCODE]`. Firmware tidak mengeksekusi payload dan tidak meneruskannya ke UART Marlin.
 

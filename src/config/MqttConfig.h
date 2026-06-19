@@ -21,6 +21,7 @@ namespace MqttConfig {
   constexpr const char *TOPIC_PROGRESS = "progress";
   constexpr const char *TOPIC_ERROR = "error";
   constexpr const char *TOPIC_POSITION = "position";
+  constexpr const char *TOPIC_MACHINE = "machine";
   constexpr const char *TOPIC_NETWORK = "network";
   constexpr const char *TOPIC_TIME = "time";
   constexpr const char *TOPIC_ALARM = "alarm";
@@ -35,8 +36,12 @@ namespace MqttConfig {
   constexpr uint16_t SOCKET_TIMEOUT_SEC = 1;
   constexpr unsigned long MONITOR_INTERVAL_MS = 1000;
   constexpr unsigned long POSITION_INTERVAL_MS = 1000;
+  constexpr unsigned long MACHINE_INTERVAL_MS = 5000;
   constexpr unsigned long PROGRESS_INTERVAL_MS = 1000;
   constexpr unsigned long TIME_INTERVAL_MS = 5000;
+
+  // Disiapkan hanya untuk pengujian dashboard tanpa Marlin. Default harus false.
+  constexpr bool ENABLE_POSITION_SIMULATION = false;
 }
 
 #endif

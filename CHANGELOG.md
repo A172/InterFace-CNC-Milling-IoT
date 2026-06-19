@@ -2,6 +2,19 @@
 
 ## 2026-06-20
 
+- Mengurutkan Machine Ctrl&Status menjadi CNC, Home X/Y/Z, SoftEnd, Spindle, Feed XY/Z, Area X/Y/Z, lalu Refresh Status.
+- Menyesuaikan indeks handler agar navigasi dan aksi setiap item tetap benar setelah perubahan urutan.
+- Melengkapi README dengan fungsi seluruh menu/submenu yang sudah tersedia.
+- Menjelaskan bahwa Refresh Status membaca ulang `M203`, `M115`, `M119`, dan `M211` tanpa menggerakkan mesin.
+- Mendokumentasikan bahwa edit Area X/Y/Z masih lokal dan belum diterapkan ke Marlin.
+- Menambahkan topic retained `cnc/machine` untuk state CNC, spindle, soft endstop, feedrate, dan sensor home.
+- Menandai detail mesin sebagai `?` atau `null` saat CNC belum `CONNECTED` agar status lama tidak dianggap data nyata.
+- Menambahkan validitas dan sumber data pada `cnc/position`.
+- Menampilkan posisi tidak tersedia sebagai nilai `null` dengan display `?`, bukan angka nol palsu.
+- Menyiapkan simulasi posisi MQTT dengan default nonaktif.
+- Mengganti menu `Settings` menjadi `About` pada urutan terakhir workflow menu utama.
+- Menambahkan layar About dengan logo, nama firmware, versi, Alfath Yusuf Biyono, NIM 2141170132, dan tanggal update.
+- Menambahkan scrolling About non-blocking serta keluar melalui Enter, Back, atau klik rotary.
 - Menetapkan nama firmware `AYB Interface` secara terpusat di `AppConfig.h`.
 - Menggunakan identitas firmware pada boot screen, Serial Monitor, menu About, dan dokumentasi.
 - Menambahkan toggle `CNC_ENABLE_MARLIN_CONNECTION` di `main.cpp`; default dinonaktifkan selama SKR belum tersambung.

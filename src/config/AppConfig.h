@@ -6,6 +6,9 @@ namespace AppConfig {
   constexpr const char *FIRMWARE_NAME = "AYB Interface";
   constexpr const char *FIRMWARE_VERSION = "1.0";
   constexpr const char *FIRMWARE_DESCRIPTION = "ESP32-S3 CNC Interface";
+  constexpr const char *FIRMWARE_AUTHOR = "Alfath Yusuf Biyono";
+  constexpr const char *FIRMWARE_AUTHOR_ID = "2141170132";
+  constexpr const char *FIRMWARE_LAST_UPDATED = "20/06/2026";
 
   // Fokus pengembangan saat ini: validasi tampilan dan navigasi.
   // Saat aktif, perintah G-code tidak dikirim ke controller CNC.
@@ -85,6 +88,10 @@ namespace AppConfig {
   constexpr unsigned long BUTTON_JOG_REPEAT_MS = 500;  // Repeat setiap tombol ditahan
   constexpr unsigned long UI_UPDATE_INTERVAL_MS = 100; // Refresh UI rate
   constexpr unsigned long CONFIRM_RESULT_MESSAGE_MS = 1500; // Lama pesan hasil konfirmasi tampil
+  constexpr unsigned long ABOUT_SCROLL_INTERVAL_MS = 100;
+  constexpr unsigned long ABOUT_SCROLL_START_HOLD_MS = 1200;
+  constexpr unsigned long ABOUT_SCROLL_END_HOLD_MS = 1500;
+  constexpr uint8_t ABOUT_SCROLL_MAX_OFFSET = 50;
 
   // ========== PASSIVE BUZZER ==========
   constexpr bool ENABLE_BUZZER_KEY_FEEDBACK = true;

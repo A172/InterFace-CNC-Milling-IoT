@@ -15,6 +15,14 @@ class LcdHandler {
     void showMessage(const char *title, const char *message);
     void showCenteredMessage(const char *title, const char *message);
     void showWifiSetup(const char *apName);
+    void showAbout(
+      const char *firmwareName,
+      const char *version,
+      const char *author,
+      const char *authorId,
+      const char *lastUpdated,
+      uint8_t scrollOffset
+    );
     void showBootSplash(
       const char *title,
       const char *subtitle,

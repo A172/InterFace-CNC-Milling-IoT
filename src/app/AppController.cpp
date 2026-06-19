@@ -225,17 +225,17 @@ namespace {
     return item;
   }
 
-  constexpr size_t MACHINE_ITEM_SPINDLE = 0;
-  constexpr size_t MACHINE_ITEM_MARLIN = 1;
-  constexpr size_t MACHINE_ITEM_SOFT_ENDSTOP = 2;
-  constexpr size_t MACHINE_ITEM_FEED_XY = 3;
-  constexpr size_t MACHINE_ITEM_FEED_Z = 4;
-  constexpr size_t MACHINE_ITEM_AREA_X = 5;
-  constexpr size_t MACHINE_ITEM_AREA_Y = 6;
-  constexpr size_t MACHINE_ITEM_AREA_Z = 7;
-  constexpr size_t MACHINE_ITEM_HOME_X = 8;
-  constexpr size_t MACHINE_ITEM_HOME_Y = 9;
-  constexpr size_t MACHINE_ITEM_HOME_Z = 10;
+  constexpr size_t MACHINE_ITEM_MARLIN = 0;
+  constexpr size_t MACHINE_ITEM_HOME_X = 1;
+  constexpr size_t MACHINE_ITEM_HOME_Y = 2;
+  constexpr size_t MACHINE_ITEM_HOME_Z = 3;
+  constexpr size_t MACHINE_ITEM_SOFT_ENDSTOP = 4;
+  constexpr size_t MACHINE_ITEM_SPINDLE = 5;
+  constexpr size_t MACHINE_ITEM_FEED_XY = 6;
+  constexpr size_t MACHINE_ITEM_FEED_Z = 7;
+  constexpr size_t MACHINE_ITEM_AREA_X = 8;
+  constexpr size_t MACHINE_ITEM_AREA_Y = 9;
+  constexpr size_t MACHINE_ITEM_AREA_Z = 10;
   constexpr size_t MACHINE_ITEM_REFRESH = 11;
 
   constexpr size_t NETWORK_ITEM_WIFI = 0;
@@ -305,7 +305,7 @@ namespace {
       "Select Job",
       "Machine Ctrl&Status",
       "Network",
-      "Settings"
+      "About"
     };
   }
 }
@@ -375,6 +375,9 @@ void AppController::showStandbyScreen() {
   String networkStatus = standbyNetworkStatusText();
   const char *networkStatusPtr = networkStatus.length() ? networkStatus.c_str() : nullptr;
   _lastStandbyNetworkStatus = networkStatus;
+  bool positionValid =
+    marlinConnectionState() == MarlinConnectionState::Connected &&
+    _positionValid;
 
   _menu.showStandby(
     _posX,
@@ -385,7 +388,8 @@ void AppController::showStandbyScreen() {
     computeProgress(),
     timePtr,
     machineStatusPtr,
-    networkStatusPtr
+    networkStatusPtr,
+    positionValid
   );
 }
 
@@ -399,6 +403,67 @@ void AppController::showSubMenu(const char *title, const std::vector<String> &it
   pushMenuState(_menu.items(), _menu.selectedIndex());
   _uiState = UiState::Menu;
   _menu.showMenu(title, items, 0);
+}
+
+void AppController::showAboutScreen() {
+  _uiState = UiState::About;
+  _aboutScrollOffset = 0;
+  _aboutEnteredAt = millis();
+  _aboutLastScrollAt = _aboutEnteredAt;
+  _aboutEndReachedAt = 0;
+  _lcd.showAbout(
+    AppConfig::FIRMWARE_NAME,
+    AppConfig::FIRMWARE_VERSION,
+    AppConfig::FIRMWARE_AUTHOR,
+    AppConfig::FIRMWARE_AUTHOR_ID,
+    AppConfig::FIRMWARE_LAST_UPDATED,
+    _aboutScrollOffset
+  );
+}
+
+void AppController::updateAboutScreen() {
+  if (_uiState != UiState::About) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (_aboutScrollOffset == 0 &&
+      now - _aboutEnteredAt < AppConfig::ABOUT_SCROLL_START_HOLD_MS) {
+    return;
+  }
+
+  if (_aboutScrollOffset < AppConfig::ABOUT_SCROLL_MAX_OFFSET) {
+    if (now - _aboutLastScrollAt < AppConfig::ABOUT_SCROLL_INTERVAL_MS) {
+      return;
+    }
+    _aboutLastScrollAt = now;
+    _aboutScrollOffset++;
+    if (_aboutScrollOffset == AppConfig::ABOUT_SCROLL_MAX_OFFSET) {
+      _aboutEndReachedAt = now;
+    }
+  } else {
+    if (now - _aboutEndReachedAt < AppConfig::ABOUT_SCROLL_END_HOLD_MS) {
+      return;
+    }
+    _aboutScrollOffset = 0;
+    _aboutEnteredAt = now;
+    _aboutLastScrollAt = now;
+    _aboutEndReachedAt = 0;
+  }
+
+  _lcd.showAbout(
+    AppConfig::FIRMWARE_NAME,
+    AppConfig::FIRMWARE_VERSION,
+    AppConfig::FIRMWARE_AUTHOR,
+    AppConfig::FIRMWARE_AUTHOR_ID,
+    AppConfig::FIRMWARE_LAST_UPDATED,
+    _aboutScrollOffset
+  );
+}
+
+void AppController::exitAboutScreen() {
+  _uiState = UiState::Menu;
+  _menu.redraw();
 }
 
 bool AppController::isMarlinResponding() const {
@@ -485,6 +550,7 @@ String AppController::currentUiStateName() const {
     case UiState::SetOrigin: return String("set_origin");
     case UiState::MachineStatus: return String("machine_status");
     case UiState::NetworkStatus: return String("network_status");
+    case UiState::About: return String("about");
   }
 
   return String("unknown");
@@ -556,17 +622,17 @@ std::vector<String> AppController::machineStatusItems() const {
   String softEndstop = String("SoftEnd: ") + softEndstopStatusText();
 
   return {
-    String("Spindle: ") + (_spindleOn ? "ON" : "OFF"),
     String("CNC: ") + marlinStatusText(),
+    String("Home X: ") + _homeXStatus,
+    String("Home Y: ") + _homeYStatus,
+    String("Home Z: ") + _homeZStatus,
     softEndstop,
+    String("Spindle: ") + (_spindleOn ? "ON" : "OFF"),
     feedrateItem("Feed XY", _machineFeedrateXY, _machineFeedrateLoaded, _machineFeedrateEditing && _machineStatusSelected == MACHINE_ITEM_FEED_XY),
     feedrateItem("Feed Z", _machineFeedrateZ, _machineFeedrateLoaded, _machineFeedrateEditing && _machineStatusSelected == MACHINE_ITEM_FEED_Z),
     millimeterItem("Area X", _machineWorkAreaX, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == MACHINE_ITEM_AREA_X),
     millimeterItem("Area Y", _machineWorkAreaY, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == MACHINE_ITEM_AREA_Y),
     millimeterItem("Area Z", _machineWorkAreaZ, _machineWorkAreaLoaded, _machineWorkAreaEditing && _machineStatusSelected == MACHINE_ITEM_AREA_Z),
-    String("Home X: ") + _homeXStatus,
-    String("Home Y: ") + _homeYStatus,
-    String("Home Z: ") + _homeZStatus,
     String("Refresh Status")
   };
 }
@@ -1071,10 +1137,21 @@ void AppController::publishMqttMonitoring() {
   snapshot.homeX = _homeXStatus;
   snapshot.homeY = _homeYStatus;
   snapshot.homeZ = _homeZStatus;
-  // Nilai awal 0 hanya untuk uji koneksi MQTT; nanti diganti dari respons M114 Marlin.
+  snapshot.softEndstop = softEndstopStatusText();
+  snapshot.spindleOn = _spindleOn;
+  snapshot.feedrateXY = _machineFeedrateXY;
+  snapshot.feedrateZ = _machineFeedrateZ;
+  snapshot.feedrateValid = _machineFeedrateLoaded;
   snapshot.posX = _posX;
   snapshot.posY = _posY;
   snapshot.posZ = _posZ;
+  bool marlinPositionValid =
+    marlinConnectionState() == MarlinConnectionState::Connected &&
+    _positionValid;
+  snapshot.positionValid = marlinPositionValid || MqttConfig::ENABLE_POSITION_SIMULATION;
+  snapshot.positionSource = marlinPositionValid
+    ? "marlin"
+    : (MqttConfig::ENABLE_POSITION_SIMULATION ? "simulation" : "unavailable");
   snapshot.progress = computeProgress();
   snapshot.sdReady = _sdCard.isReady();
 
@@ -1768,6 +1845,8 @@ void AppController::update() {
     updateInput();
   }
 
+  updateAboutScreen();
+
   if (_uiState == UiState::Info &&
       _infoAutoCloseMs > 0 &&
       millis() - _infoShownAt >= _infoAutoCloseMs) {
@@ -1917,6 +1996,7 @@ void AppController::parseMarlinResponse(const String &line) {
     _posX = xStr.toFloat();
     _posY = yStr.toFloat();
     _posZ = zStr.toFloat();
+    _positionValid = true;
 
     // Update tampilan jika sedang standby agar angka sinkron
     if (_uiState == UiState::Standby) {
@@ -1947,6 +2027,14 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
     if (buttonNumber == (uint8_t)PinConfig::BTN7 ||
         buttonNumber == (uint8_t)PinConfig::BTN8) {
       dismissInfoScreen();
+    }
+    return;
+  }
+
+  if (_uiState == UiState::About) {
+    if (buttonNumber == (uint8_t)PinConfig::BTN_ENTER ||
+        buttonNumber == (uint8_t)PinConfig::BTN_BACK) {
+      exitAboutScreen();
     }
     return;
   }
@@ -2196,6 +2284,11 @@ void AppController::confirmSetOrigin(UiState returnState) {
 }
 
 void AppController::processSelectAction() {
+  if (_uiState == UiState::About) {
+    exitAboutScreen();
+    return;
+  }
+
   if (_uiState == UiState::Standby) {
     showMainMenuScreen();
     return;
@@ -2262,11 +2355,8 @@ void AppController::processSelectAction() {
       return;
     }
 
-    if (choice == "Settings") {
-      showSubMenu(
-        "SETTINGS",
-        {"UI Information", "Jog Step", "About Firmware"}
-      );
+    if (choice == "About") {
+      showAboutScreen();
       return;
     }
 
@@ -2327,22 +2417,6 @@ void AppController::processSelectAction() {
       return;
     }
 
-    if (choice == "UI Information") {
-      showInfoScreen("UI MODE", "Navigasi aktif");
-      return;
-    }
-
-    if (choice == "Jog Step") {
-      showInfoScreen("JOG STEP", "Default 1.00 mm");
-      return;
-    }
-
-    if (choice == "About Firmware") {
-      String version = String("Firmware v") + AppConfig::FIRMWARE_VERSION;
-      showInfoScreen(AppConfig::FIRMWARE_NAME, version.c_str());
-      return;
-    }
-
     showInfoScreen("UI PREVIEW", "Belum diimplementasi");
     return;
   }
@@ -2381,6 +2455,10 @@ void AppController::onEncoderTurned(int8_t direction) {
   Serial.println(direction > 0 ? "Z+" : "Z-");
 
   if (_uiState == UiState::Info) {
+    return;
+  }
+
+  if (_uiState == UiState::About) {
     return;
   }
 
@@ -2688,6 +2766,7 @@ void AppController::beginMarlinConnection() {
   _marlinConnectionEnabled = true;
   _marlinEverResponded = false;
   _marlinErrorActive = false;
+  _positionValid = false;
   _lastMarlinResponseMs = 0;
   _marlinMonitorStartedAt = 0;
   _lastM114Request = 0;

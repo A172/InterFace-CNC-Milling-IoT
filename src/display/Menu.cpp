@@ -5,7 +5,7 @@ Menu::Menu(LcdHandler &lcd)
   : _lcd(lcd) {
 }
 
-void Menu::showStandby(float x, float y, float z, const char *eta, const char *jobName, int progress, const char *timeStr, const char *machineStatus, const char *networkStatus) {
+void Menu::showStandby(float x, float y, float z, const char *eta, const char *jobName, int progress, const char *timeStr, const char *machineStatus, const char *networkStatus, bool positionValid) {
   char top[32];
   char mid[32];
   char bottom[32];
@@ -20,10 +20,18 @@ void Menu::showStandby(float x, float y, float z, const char *eta, const char *j
   snprintf(top, sizeof(top), "%s", topLine.c_str());
 
   // Baris 2: Koordinat X dan Y (Gunakan spasi tetap agar angka sejajar)
-  snprintf(mid, sizeof(mid), "X:%6.2f Y:%6.2f", x, y);
+  if (positionValid) {
+    snprintf(mid, sizeof(mid), "X:%6.2f Y:%6.2f", x, y);
+  } else {
+    snprintf(mid, sizeof(mid), "X:%6s Y:%6s", "?", "?");
+  }
 
   // Baris 3: Koordinat Z (Feedrate dihapus untuk memberi ruang Progress Bar)
-  snprintf(bottom, sizeof(bottom), "Z:%6.2f", z);
+  if (positionValid) {
+    snprintf(bottom, sizeof(bottom), "Z:%6.2f", z);
+  } else {
+    snprintf(bottom, sizeof(bottom), "Z:%6s", "?");
+  }
 
   _lcd.showStandbyLines(top, mid, bottom, eta, jobName, progress, timeStr, networkStatus);
 }
