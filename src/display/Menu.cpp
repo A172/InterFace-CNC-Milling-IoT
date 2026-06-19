@@ -5,7 +5,7 @@ Menu::Menu(LcdHandler &lcd)
   : _lcd(lcd) {
 }
 
-void Menu::showStandby(float x, float y, float z, const char *eta, const char *jobName, int progress, const char *timeStr, const char *machineStatus) {
+void Menu::showStandby(float x, float y, float z, const char *eta, const char *jobName, int progress, const char *timeStr, const char *machineStatus, const char *networkStatus) {
   char top[32];
   char mid[32];
   char bottom[32];
@@ -14,7 +14,7 @@ void Menu::showStandby(float x, float y, float z, const char *eta, const char *j
   // Jika ada job, status berubah jadi RUNNING
   String topLine = (progress >= 0) ? "RUNNING" : "IDLE";
   if (machineStatus != nullptr && machineStatus[0] != '\0') {
-    topLine += " M:";
+    topLine += " ";
     topLine += machineStatus;
   }
   snprintf(top, sizeof(top), "%s", topLine.c_str());
@@ -25,7 +25,7 @@ void Menu::showStandby(float x, float y, float z, const char *eta, const char *j
   // Baris 3: Koordinat Z (Feedrate dihapus untuk memberi ruang Progress Bar)
   snprintf(bottom, sizeof(bottom), "Z:%6.2f", z);
 
-  _lcd.showStandbyLines(top, mid, bottom, eta, jobName, progress, timeStr);
+  _lcd.showStandbyLines(top, mid, bottom, eta, jobName, progress, timeStr, networkStatus);
 }
 
 void Menu::showMainMenu(const std::vector<String> &items, size_t selected) {

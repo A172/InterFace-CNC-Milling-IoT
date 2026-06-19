@@ -4,6 +4,7 @@
 #include <WiFiManager.h>
 #include <cstring>
 #include "../config/AppConfig.h"
+#include "../config/MqttConfig.h"
 
 namespace {
   void copyToBuffer(char *target, size_t targetSize, const String &value, const char *fallback) {
@@ -24,41 +25,41 @@ bool WifiPortal::begin(WifiPortalMqttSettings *mqttSettings) {
   WiFiManager wifiManager;
   wifiManager.setConfigPortalTimeout(180);
 
-  char brokerBuffer[AppConfig::MQTT_BROKER_MAX_LEN + 1];
+  char brokerBuffer[MqttConfig::BROKER_MAX_LEN + 1];
   char portBuffer[7];
-  char topicBuffer[AppConfig::MQTT_TOPIC_PREFIX_MAX_LEN + 1];
-  char userBuffer[AppConfig::MQTT_USER_MAX_LEN + 1];
-  char passBuffer[AppConfig::MQTT_PASS_MAX_LEN + 1];
+  char topicBuffer[MqttConfig::TOPIC_PREFIX_MAX_LEN + 1];
+  char userBuffer[MqttConfig::USER_MAX_LEN + 1];
+  char passBuffer[MqttConfig::PASSWORD_MAX_LEN + 1];
 
   copyToBuffer(
     brokerBuffer,
     sizeof(brokerBuffer),
     mqttSettings != nullptr ? mqttSettings->broker : String(),
-    AppConfig::MQTT_BROKER
+    MqttConfig::BROKER
   );
   copyToBuffer(
     portBuffer,
     sizeof(portBuffer),
     mqttSettings != nullptr ? mqttSettings->port : String(),
-    String(AppConfig::MQTT_PORT).c_str()
+    String(MqttConfig::PORT).c_str()
   );
   copyToBuffer(
     topicBuffer,
     sizeof(topicBuffer),
     mqttSettings != nullptr ? mqttSettings->topicPrefix : String(),
-    AppConfig::MQTT_TOPIC_PREFIX
+    MqttConfig::TOPIC_PREFIX
   );
   copyToBuffer(
     userBuffer,
     sizeof(userBuffer),
     mqttSettings != nullptr ? mqttSettings->user : String(),
-    AppConfig::MQTT_USER
+    MqttConfig::USER
   );
   copyToBuffer(
     passBuffer,
     sizeof(passBuffer),
     mqttSettings != nullptr ? mqttSettings->password : String(),
-    AppConfig::MQTT_PASS
+    MqttConfig::PASSWORD
   );
 
   WiFiManagerParameter brokerParam("mqtt_broker", "MQTT Broker/IP", brokerBuffer, sizeof(brokerBuffer));

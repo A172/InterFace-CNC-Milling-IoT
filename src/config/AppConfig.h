@@ -2,6 +2,11 @@
 #define APP_CONFIG_H
 
 namespace AppConfig {
+  // ========== IDENTITAS FIRMWARE ==========
+  constexpr const char *FIRMWARE_NAME = "AYB Interface";
+  constexpr const char *FIRMWARE_VERSION = "1.0";
+  constexpr const char *FIRMWARE_DESCRIPTION = "ESP32-S3 CNC Interface";
+
   // Fokus pengembangan saat ini: validasi tampilan dan navigasi.
   // Saat aktif, perintah G-code tidak dikirim ke controller CNC.
   constexpr bool UI_DEVELOPMENT_MODE = true;
@@ -19,39 +24,18 @@ namespace AppConfig {
   constexpr unsigned long SERIAL_BAUD_RATE = 115200;
 
   // ========== LCD BOOT SCREEN ==========
-  constexpr const char *BOOT_TITLE = "AYB Interface";
-  constexpr const char *BOOT_SUBTITLE = "Version 1.0";
+  constexpr const char *BOOT_TITLE = FIRMWARE_NAME;
   constexpr const char *BOOT_FOOTER = "Initializing";
   constexpr unsigned int BOOT_SPLASH_MS = 2500;
 
-  // ========== NETWORK (WiFi & MQTT) ==========
+  // ========== NETWORK (WiFi) ==========
   // Nilai awal saat flash masih kosong. Setelah itu user bisa ubah dari menu Network.
   constexpr bool DEFAULT_WIFI_ENABLED = false;
-  constexpr bool DEFAULT_MQTT_ENABLED = false;
   // WiFi Configuration
   constexpr const char *WIFI_PORTAL_AP_NAME = "CNC-Interface-Setup";
   constexpr const char *WIFI_SSID = "";          // Isi sesuai jaringan Anda
   constexpr const char *WIFI_PASSWORD = "";     // Isi sesuai password WiFi
   constexpr unsigned long WIFI_TIMEOUT_MS = 20000;   // Timeout koneksi WiFi
-  
-  // MQTT Configuration
-  // Broker lokal, misalnya IP PC/Raspberry Pi yang menjalankan Mosquitto.
-  constexpr const char *MQTT_BROKER = "192.168.250.13";
-  constexpr unsigned int MQTT_PORT = 1883;
-  constexpr const char *MQTT_CLIENT_ID = "Interface CNC Milling";
-  constexpr const char *MQTT_TOPIC_PREFIX = "cnc";
-  constexpr const char *MQTT_USER = "";
-  constexpr const char *MQTT_PASS = "";
-  constexpr size_t MQTT_BROKER_MAX_LEN = 63;
-  constexpr size_t MQTT_TOPIC_PREFIX_MAX_LEN = 63;
-  constexpr size_t MQTT_USER_MAX_LEN = 31;
-  constexpr size_t MQTT_PASS_MAX_LEN = 31;
-  constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 10000;
-  constexpr uint32_t MQTT_CONNECT_TIMEOUT_MS = 250;
-  constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 1;
-  constexpr unsigned long MQTT_MONITOR_INTERVAL_MS = 1000;
-  constexpr unsigned long MQTT_POSITION_INTERVAL_MS = 1000;
-  constexpr unsigned long MQTT_TIME_INTERVAL_MS = 5000;
 
   // ========== TIME (NTP / RTC internal ESP32) ==========
   constexpr long WIB_GMT_OFFSET_SEC = 7L * 60L * 60L;
@@ -101,6 +85,13 @@ namespace AppConfig {
   constexpr unsigned long BUTTON_JOG_REPEAT_MS = 500;  // Repeat setiap tombol ditahan
   constexpr unsigned long UI_UPDATE_INTERVAL_MS = 100; // Refresh UI rate
   constexpr unsigned long CONFIRM_RESULT_MESSAGE_MS = 1500; // Lama pesan hasil konfirmasi tampil
+
+  // ========== PASSIVE BUZZER ==========
+  constexpr bool ENABLE_BUZZER_KEY_FEEDBACK = true;
+  constexpr bool ENABLE_BUZZER_NOTIFICATION = true;
+  constexpr bool ENABLE_BUZZER_MARLIN_ALARM = true;
+  constexpr uint8_t BUZZER_PWM_CHANNEL = 0;
+  constexpr unsigned long BUZZER_ALARM_REPEAT_MS = 5000;
 }
 
 #endif

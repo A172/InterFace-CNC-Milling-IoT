@@ -13,10 +13,12 @@ enum class JobSource {
 };
 
 #include "../config/AppConfig.h"
+#include "../config/MqttConfig.h"
 #include "../config/PinConfig.h"
 #include "../display/LcdHandler.h"
 #include "../input/ButtonHandler.h"
 #include "../input/EncoderHandler.h"
+#include "../output/BuzzerHandler.h"
 #include "../network/CloudMqtt.h"
 #include "../network/WifiPortal.h"
 #include "../storage/SdCardReader.h"
@@ -35,6 +37,8 @@ class AppController {
     void beginSerial();
     void beginDisplay(bool holdBootScreen = false);
     void beginInput();
+    void beginBuzzer();
+    void beginMarlinConnection();
     void beginStorage();
     void beginNetwork();
 
@@ -63,9 +67,19 @@ class AppController {
   void processSelectAction();
 
   private:
+    enum class MarlinConnectionState {
+      Off,
+      Waiting,
+      Disconnected,
+      Connected,
+      Lost,
+      Error
+    };
+
     // Modul hardware lokal.
     ButtonHandler _buttons;
     EncoderHandler _encoder;
+    BuzzerHandler _buzzer;
     LcdHandler _lcd;
     Menu _menu;
     SdCardReader _sdCard;
@@ -154,10 +168,15 @@ class AppController {
   String mqttBrokerInfo() const;
   void refreshMachineStatus();
   bool isMarlinResponding() const;
+  MarlinConnectionState marlinConnectionState() const;
+  bool canSendMarlinCommand() const;
+  void showCncUnavailable(UiState returnState);
   String currentUiStateName() const;
   String softEndstopStatusText() const;
   String marlinStatusText() const;
   String standbyMarlinStatusText() const;
+  String standbyNetworkStatusText();
+  void refreshStandbyNetworkStatus();
   void publishMqttMonitoring();
   bool toggleSpindle();
   bool applyMachineFeedrate();
@@ -205,12 +224,13 @@ class AppController {
     bool _networkStarted = false;
     bool _mqttStarted = false;
     bool _wifiEnabled = AppConfig::DEFAULT_WIFI_ENABLED;
-    bool _mqttEnabled = AppConfig::DEFAULT_MQTT_ENABLED;
-    String _mqttBroker = AppConfig::MQTT_BROKER;
-    uint16_t _mqttPort = AppConfig::MQTT_PORT;
-    String _mqttTopicPrefix = AppConfig::MQTT_TOPIC_PREFIX;
-    String _mqttUser = AppConfig::MQTT_USER;
-    String _mqttPassword = AppConfig::MQTT_PASS;
+    bool _mqttEnabled = MqttConfig::DEFAULT_ENABLED;
+    String _mqttBroker = MqttConfig::BROKER;
+    uint16_t _mqttPort = MqttConfig::PORT;
+    String _mqttTopicPrefix = MqttConfig::TOPIC_PREFIX;
+    String _mqttUser = MqttConfig::USER;
+    String _mqttPassword = MqttConfig::PASSWORD;
+    String _lastStandbyNetworkStatus;
     bool _spindleOn = false;
     bool _machineFeedrateEditing = false;
     bool _machineFeedrateLoaded = false;
@@ -218,7 +238,9 @@ class AppController {
     bool _machineWorkAreaLoaded = false;
     bool _softEndstopLoaded = false;
     bool _softEndstopEnabled = false;
+    bool _marlinConnectionEnabled = false;
     bool _marlinEverResponded = false;
+    bool _marlinErrorActive = false;
     size_t _machineStatusSelected = 0;
     size_t _machineStatusOffset = 0;
     size_t _networkStatusSelected = 0;
@@ -247,6 +269,7 @@ class AppController {
     unsigned long _lastM115Request = 0;
     unsigned long _lastM211Request = 0;
     unsigned long _lastMarlinResponseMs = 0;
+    unsigned long _marlinMonitorStartedAt = 0;
     unsigned long _lastMarlinStatusPoll = 0;
     unsigned long _lastStatusScreenRefresh = 0;
     void updateMarlinCommunication();

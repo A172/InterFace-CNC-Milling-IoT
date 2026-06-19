@@ -19,6 +19,7 @@ struct MqttMonitoringSnapshot {
   float posX = 0.0f;
   float posY = 0.0f;
   float posZ = 0.0f;
+  int progress = -1;
   bool sdReady = false;
 };
 
@@ -57,20 +58,28 @@ class CloudMqtt {
     int _lastState = MQTT_DISCONNECTED;
     unsigned long _lastReconnectAttempt = 0;
     unsigned long _lastPositionPublish = 0;
+    unsigned long _lastProgressPublish = 0;
     unsigned long _lastTimePublish = 0;
     bool _networkPublished = false;
+    String _lastProgressPayload;
     String _lastNetworkPayload;
     String _lastTimePayload;
     String _lastAlarmPayload;
+    String _lastErrorPayload;
 
     void ensureConfigured();
     bool brokerReachable();
     bool connect();
+    bool subscribeInboundTopics();
+    String topicName(const char *suffix) const;
     bool publishJson(const String &topicSuffix, const String &payload, bool retained = false);
+    void publishConnectionStatus(bool connected, const char *state);
     void publishNetwork(const MqttMonitoringSnapshot &snapshot, bool force = false);
     void publishPosition(const MqttMonitoringSnapshot &snapshot, unsigned long now);
+    void publishProgress(const MqttMonitoringSnapshot &snapshot, unsigned long now);
     void publishTime(const MqttMonitoringSnapshot &snapshot, unsigned long now);
     void publishAlarm(const MqttMonitoringSnapshot &snapshot);
+    void publishError(const MqttMonitoringSnapshot &snapshot);
 };
 
 #endif

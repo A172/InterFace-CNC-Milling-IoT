@@ -15,6 +15,13 @@
 // Aktifkan pembacaan push button dan rotary encoder.
 #define CNC_ENABLE_INPUT
 
+// Aktifkan passive buzzer pada GPIO 38.
+#define CNC_ENABLE_BUZZER
+
+// Aktifkan komunikasi UART dan monitoring controller CNC berbasis Marlin.
+// Biarkan nonaktif selama SKR V1.4 Turbo belum tersambung.
+// #define CNC_ENABLE_MARLIN_CONNECTION
+
 // Aktifkan modul SD card.
 #define CNC_ENABLE_SD_CARD
 
@@ -47,6 +54,18 @@ void setup() {
   app.beginInput();
 #else
   Serial.println("Input tombol dan encoder nonatifkan");
+#endif
+
+#if defined(CNC_ENABLE_BUZZER)
+  app.beginBuzzer();
+#else
+  Serial.println("Buzzer nonaktif");
+#endif
+
+#if defined(CNC_ENABLE_MARLIN_CONNECTION)
+  app.beginMarlinConnection();
+#else
+  Serial.println("Koneksi CNC/Marlin nonaktif");
 #endif
 
 #if defined(CNC_ENABLE_SD_CARD)

@@ -274,7 +274,7 @@ namespace {
 
   uint16_t normalizedMqttPort(uint32_t port) {
     if (port == 0 || port > 65535) {
-      return AppConfig::MQTT_PORT;
+      return MqttConfig::PORT;
     }
 
     return (uint16_t)port;
@@ -330,6 +330,11 @@ AppController::AppController()
       PinConfig::ENCODER_DT,
       PinConfig::ENCODER_SW
     ),
+    _buzzer(
+      PinConfig::BUZZER,
+      AppConfig::BUZZER_PWM_CHANNEL,
+      AppConfig::BUZZER_ALARM_REPEAT_MS
+    ),
     _lcd(),
     _menu(_lcd),
     _sdCard(
@@ -367,6 +372,9 @@ void AppController::showStandbyScreen() {
   const char *timePtr = time.length() ? time.c_str() : nullptr;
   String machineStatus = standbyMarlinStatusText();
   const char *machineStatusPtr = machineStatus.length() ? machineStatus.c_str() : nullptr;
+  String networkStatus = standbyNetworkStatusText();
+  const char *networkStatusPtr = networkStatus.length() ? networkStatus.c_str() : nullptr;
+  _lastStandbyNetworkStatus = networkStatus;
 
   _menu.showStandby(
     _posX,
@@ -376,7 +384,8 @@ void AppController::showStandbyScreen() {
     jobNamePtr,
     computeProgress(),
     timePtr,
-    machineStatusPtr
+    machineStatusPtr,
+    networkStatusPtr
   );
 }
 
@@ -393,25 +402,75 @@ void AppController::showSubMenu(const char *title, const std::vector<String> &it
 }
 
 bool AppController::isMarlinResponding() const {
-  if (!_marlinEverResponded) {
+  if (!_marlinConnectionEnabled || !_marlinEverResponded) {
     return false;
   }
 
   return millis() - _lastMarlinResponseMs <= AppConfig::MARLIN_RESPONSE_TIMEOUT_MS;
 }
 
-String AppController::marlinStatusText() const {
+AppController::MarlinConnectionState AppController::marlinConnectionState() const {
+  if (!_marlinConnectionEnabled) {
+    return MarlinConnectionState::Off;
+  }
+
+  if (_marlinErrorActive) {
+    return MarlinConnectionState::Error;
+  }
+
   if (isMarlinResponding()) {
-    return String("OK");
+    return MarlinConnectionState::Connected;
   }
 
-  if (!_marlinEverResponded &&
-      (_lastMarlinStatusPoll == 0 ||
-       millis() - _lastMarlinStatusPoll <= AppConfig::MARLIN_RESPONSE_TIMEOUT_MS)) {
-    return String("WAIT");
+  if (_marlinEverResponded) {
+    return MarlinConnectionState::Lost;
   }
 
-  return String("NO RESP");
+  if (_marlinMonitorStartedAt == 0 ||
+      millis() - _marlinMonitorStartedAt <= AppConfig::MARLIN_RESPONSE_TIMEOUT_MS) {
+    return MarlinConnectionState::Waiting;
+  }
+
+  return MarlinConnectionState::Disconnected;
+}
+
+bool AppController::canSendMarlinCommand() const {
+  return marlinConnectionState() == MarlinConnectionState::Connected;
+}
+
+void AppController::showCncUnavailable(UiState returnState) {
+  const char *message = "Belum terhubung";
+  switch (marlinConnectionState()) {
+    case MarlinConnectionState::Off: message = "Koneksi CNC OFF"; break;
+    case MarlinConnectionState::Waiting: message = "Menunggu Marlin"; break;
+    case MarlinConnectionState::Disconnected: message = "Belum terhubung"; break;
+    case MarlinConnectionState::Lost: message = "Koneksi terputus"; break;
+    case MarlinConnectionState::Error: message = "Marlin error"; break;
+    case MarlinConnectionState::Connected: return;
+  }
+
+  if (AppConfig::ENABLE_BUZZER_NOTIFICATION) {
+    _buzzer.play(BuzzerHandler::Cue::Warning);
+  }
+  showInfoScreen(
+    "CNC CONNECTION",
+    message,
+    returnState,
+    AppConfig::CONFIRM_RESULT_MESSAGE_MS
+  );
+}
+
+String AppController::marlinStatusText() const {
+  switch (marlinConnectionState()) {
+    case MarlinConnectionState::Off: return String("OFF");
+    case MarlinConnectionState::Waiting: return String("WAITING");
+    case MarlinConnectionState::Disconnected: return String("DISCONNECTED");
+    case MarlinConnectionState::Connected: return String("CONNECTED");
+    case MarlinConnectionState::Lost: return String("LOST");
+    case MarlinConnectionState::Error: return String("ERROR");
+  }
+
+  return String("UNKNOWN");
 }
 
 String AppController::currentUiStateName() const {
@@ -440,18 +499,57 @@ String AppController::softEndstopStatusText() const {
 }
 
 String AppController::standbyMarlinStatusText() const {
-  if (!AppConfig::ENABLE_MARLIN_STATUS_MONITOR) {
-    return String();
+  switch (marlinConnectionState()) {
+    case MarlinConnectionState::Off: return String("CNC:OFF");
+    case MarlinConnectionState::Waiting: return String("CNC:WAIT");
+    case MarlinConnectionState::Disconnected: return String("CNC:DISC");
+    case MarlinConnectionState::Connected: return String("CNC:OK");
+    case MarlinConnectionState::Lost: return String("CNC:LOST");
+    case MarlinConnectionState::Error: return String("CNC:ERR");
   }
 
-  String status = marlinStatusText();
-  if (status == "NO RESP") {
-    return String("NO");
+  return String("CNC:?");
+}
+
+String AppController::standbyNetworkStatusText() {
+  char wifiStatus = 'X';
+  if (_wifiEnabled && _wifi.isConnected()) {
+    wifiStatus = 'V';
+  } else if (_wifiEnabled) {
+    wl_status_t state = WiFi.status();
+    if (state == WL_NO_SSID_AVAIL ||
+        state == WL_CONNECT_FAILED ||
+        state == WL_CONNECTION_LOST) {
+      wifiStatus = '?';
+    }
   }
-  if (status == "WAIT") {
-    return String("--");
+
+  char mqttStatus = 'X';
+  if (_mqttEnabled && _cloud.isConnected()) {
+    mqttStatus = 'V';
+  } else if (_mqttEnabled) {
+    int state = _cloud.state();
+    if (state != MQTT_DISCONNECTED) {
+      mqttStatus = '?';
+    }
   }
-  return status;
+
+  char status[16];
+  snprintf(status, sizeof(status), "WiFi:%c MQTT:%c", wifiStatus, mqttStatus);
+  return String(status);
+}
+
+void AppController::refreshStandbyNetworkStatus() {
+  if (_uiState != UiState::Standby) {
+    return;
+  }
+
+  String current = standbyNetworkStatusText();
+  if (current == _lastStandbyNetworkStatus) {
+    return;
+  }
+
+  showStandbyScreen();
 }
 
 std::vector<String> AppController::machineStatusItems() const {
@@ -459,7 +557,7 @@ std::vector<String> AppController::machineStatusItems() const {
 
   return {
     String("Spindle: ") + (_spindleOn ? "ON" : "OFF"),
-    String("Marlin: ") + marlinStatusText(),
+    String("CNC: ") + marlinStatusText(),
     softEndstop,
     feedrateItem("Feed XY", _machineFeedrateXY, _machineFeedrateLoaded, _machineFeedrateEditing && _machineStatusSelected == MACHINE_ITEM_FEED_XY),
     feedrateItem("Feed Z", _machineFeedrateZ, _machineFeedrateLoaded, _machineFeedrateEditing && _machineStatusSelected == MACHINE_ITEM_FEED_Z),
@@ -611,40 +709,50 @@ std::vector<String> AppController::networkStatusItems() {
 
 void AppController::loadNetworkSettings() {
   Preferences prefs;
+  bool brokerMigrated = false;
   prefs.begin(NETWORK_PREFS_NAMESPACE, true);
   _wifiEnabled = prefs.getBool(NETWORK_PREF_WIFI, AppConfig::DEFAULT_WIFI_ENABLED);
-  _mqttEnabled = prefs.getBool(NETWORK_PREF_MQTT, AppConfig::DEFAULT_MQTT_ENABLED);
+  _mqttEnabled = prefs.getBool(NETWORK_PREF_MQTT, MqttConfig::DEFAULT_ENABLED);
   _mqttBroker = normalizedMqttText(
-    prefs.getString(NETWORK_PREF_MQTT_BROKER, AppConfig::MQTT_BROKER),
-    AppConfig::MQTT_BROKER,
-    AppConfig::MQTT_BROKER_MAX_LEN,
+    prefs.getString(NETWORK_PREF_MQTT_BROKER, MqttConfig::BROKER),
+    MqttConfig::BROKER,
+    MqttConfig::BROKER_MAX_LEN,
     false
   );
-  _mqttPort = normalizedMqttPort(prefs.getUInt(NETWORK_PREF_MQTT_PORT, AppConfig::MQTT_PORT));
+  if (_mqttBroker == MqttConfig::LEGACY_BROKER) {
+    _mqttBroker = MqttConfig::BROKER;
+    brokerMigrated = true;
+  }
+  _mqttPort = normalizedMqttPort(prefs.getUInt(NETWORK_PREF_MQTT_PORT, MqttConfig::PORT));
   _mqttTopicPrefix = normalizedMqttText(
-    prefs.getString(NETWORK_PREF_MQTT_TOPIC, AppConfig::MQTT_TOPIC_PREFIX),
-    AppConfig::MQTT_TOPIC_PREFIX,
-    AppConfig::MQTT_TOPIC_PREFIX_MAX_LEN,
+    prefs.getString(NETWORK_PREF_MQTT_TOPIC, MqttConfig::TOPIC_PREFIX),
+    MqttConfig::TOPIC_PREFIX,
+    MqttConfig::TOPIC_PREFIX_MAX_LEN,
     false
   );
   if (_mqttTopicPrefix == "skripsi/cnc-interface") {
-    _mqttTopicPrefix = AppConfig::MQTT_TOPIC_PREFIX;
+    _mqttTopicPrefix = MqttConfig::TOPIC_PREFIX;
   }
   _mqttUser = normalizedMqttText(
-    prefs.getString(NETWORK_PREF_MQTT_USER, AppConfig::MQTT_USER),
-    AppConfig::MQTT_USER,
-    AppConfig::MQTT_USER_MAX_LEN,
+    prefs.getString(NETWORK_PREF_MQTT_USER, MqttConfig::USER),
+    MqttConfig::USER,
+    MqttConfig::USER_MAX_LEN,
     true
   );
   _mqttPassword = normalizedMqttText(
-    prefs.getString(NETWORK_PREF_MQTT_PASS, AppConfig::MQTT_PASS),
-    AppConfig::MQTT_PASS,
-    AppConfig::MQTT_PASS_MAX_LEN,
+    prefs.getString(NETWORK_PREF_MQTT_PASS, MqttConfig::PASSWORD),
+    MqttConfig::PASSWORD,
+    MqttConfig::PASSWORD_MAX_LEN,
     true
   );
   prefs.end();
 
   applyMqttSettings();
+  if (brokerMigrated) {
+    saveNetworkSettings();
+    Serial.print("[NETWORK] MQTT broker lama dimigrasikan ke ");
+    Serial.println(_mqttBroker);
+  }
   logNetworkSettings("loaded");
 
   if (!_wifiEnabled) {
@@ -676,11 +784,11 @@ void AppController::applyMqttSettings() {
 }
 
 void AppController::resetMqttSettingsToDefaults() {
-  _mqttBroker = AppConfig::MQTT_BROKER;
-  _mqttPort = AppConfig::MQTT_PORT;
-  _mqttTopicPrefix = AppConfig::MQTT_TOPIC_PREFIX;
-  _mqttUser = AppConfig::MQTT_USER;
-  _mqttPassword = AppConfig::MQTT_PASS;
+  _mqttBroker = MqttConfig::BROKER;
+  _mqttPort = MqttConfig::PORT;
+  _mqttTopicPrefix = MqttConfig::TOPIC_PREFIX;
+  _mqttUser = MqttConfig::USER;
+  _mqttPassword = MqttConfig::PASSWORD;
   applyMqttSettings();
 }
 
@@ -712,27 +820,27 @@ WifiPortalMqttSettings AppController::currentMqttPortalSettings() const {
 void AppController::updateMqttSettingsFromPortal(const WifiPortalMqttSettings &settings) {
   _mqttBroker = normalizedMqttText(
     settings.broker,
-    AppConfig::MQTT_BROKER,
-    AppConfig::MQTT_BROKER_MAX_LEN,
+    MqttConfig::BROKER,
+    MqttConfig::BROKER_MAX_LEN,
     false
   );
   _mqttPort = parseMqttPort(settings.port);
   _mqttTopicPrefix = normalizedMqttText(
     settings.topicPrefix,
-    AppConfig::MQTT_TOPIC_PREFIX,
-    AppConfig::MQTT_TOPIC_PREFIX_MAX_LEN,
+    MqttConfig::TOPIC_PREFIX,
+    MqttConfig::TOPIC_PREFIX_MAX_LEN,
     false
   );
   _mqttUser = normalizedMqttText(
     settings.user,
-    AppConfig::MQTT_USER,
-    AppConfig::MQTT_USER_MAX_LEN,
+    MqttConfig::USER,
+    MqttConfig::USER_MAX_LEN,
     true
   );
   _mqttPassword = normalizedMqttText(
     settings.password,
-    AppConfig::MQTT_PASS,
-    AppConfig::MQTT_PASS_MAX_LEN,
+    MqttConfig::PASSWORD,
+    MqttConfig::PASSWORD_MAX_LEN,
     true
   );
 
@@ -946,7 +1054,7 @@ void AppController::publishMqttMonitoring() {
     return;
   }
 
-  if (millis() - _lastMqttMonitorPublish < AppConfig::MQTT_MONITOR_INTERVAL_MS) {
+  if (millis() - _lastMqttMonitorPublish < MqttConfig::MONITOR_INTERVAL_MS) {
     return;
   }
 
@@ -967,12 +1075,18 @@ void AppController::publishMqttMonitoring() {
   snapshot.posX = _posX;
   snapshot.posY = _posY;
   snapshot.posZ = _posZ;
+  snapshot.progress = computeProgress();
   snapshot.sdReady = _sdCard.isReady();
 
   _cloud.publishMonitoring(snapshot);
 }
 
 bool AppController::toggleSpindle() {
+  if (!canSendMarlinCommand()) {
+    showCncUnavailable(UiState::MachineStatus);
+    return false;
+  }
+
   const bool nextState = !_spindleOn;
 
   if (AppConfig::ENABLE_SPINDLE_CONTROL) {
@@ -991,6 +1105,11 @@ bool AppController::toggleSpindle() {
 }
 
 bool AppController::applyMachineFeedrate() {
+  if (!canSendMarlinCommand()) {
+    showCncUnavailable(UiState::MachineStatus);
+    return false;
+  }
+
   if (!AppConfig::ENABLE_MACHINE_FEEDRATE_CONTROL) {
     showInfoScreen(
       "FEEDRATE",
@@ -1012,6 +1131,10 @@ bool AppController::applyMachineFeedrate() {
 }
 
 void AppController::requestMachineFeedrateStatus(bool force) {
+  if (!canSendMarlinCommand()) {
+    return;
+  }
+
   if (!force && millis() - _lastM203Request < AppConfig::MACHINE_STATUS_POLL_MS) {
     return;
   }
@@ -1045,6 +1168,10 @@ void AppController::parseMachineFeedrateStatus(const String &line) {
 }
 
 void AppController::requestMachineGeometryStatus(bool force) {
+  if (!canSendMarlinCommand()) {
+    return;
+  }
+
   if (!force && millis() - _lastM115Request < AppConfig::MACHINE_STATUS_POLL_MS) {
     return;
   }
@@ -1086,6 +1213,10 @@ void AppController::parseMachineGeometryStatus(const String &line) {
 }
 
 void AppController::requestHomeSensorStatus(bool force) {
+  if (!canSendMarlinCommand()) {
+    return;
+  }
+
   if (!force && millis() - _lastM119Request < AppConfig::MACHINE_STATUS_POLL_MS) {
     return;
   }
@@ -1124,6 +1255,10 @@ void AppController::parseHomeSensorStatus(const String &line) {
 }
 
 void AppController::requestSoftEndstopStatus(bool force) {
+  if (!canSendMarlinCommand()) {
+    return;
+  }
+
   if (!force && millis() - _lastM211Request < AppConfig::MACHINE_STATUS_POLL_MS) {
     return;
   }
@@ -1368,6 +1503,11 @@ void AppController::executeConfirmedAction() {
   _pendingAction = PendingAction::None;
 
   if (action == PendingAction::HomeAll) {
+    if (!canSendMarlinCommand()) {
+      showCncUnavailable(returnState);
+      return;
+    }
+
     if (AppConfig::ENABLE_HOME_CONTROL) {
       Serial1.println("G28");
       showInfoScreen(
@@ -1457,9 +1597,13 @@ void AppController::executeConfirmedAction() {
     logNetworkSettings("reset");
     _networkStarted = false;
     _mqttStarted = false;
+
+    // Setelah credential dihapus, langsung buka kembali portal konfigurasi.
+    startNetworkFromSettings();
+    const bool wifiReady = _wifi.isConnected();
     showInfoScreen(
-      "RESET WIFI",
-      "Restart untuk portal",
+      wifiReady ? "RESET WIFI" : "WIFI SETUP",
+      wifiReady ? "WiFi tersimpan" : "Portal timeout",
       returnState,
       AppConfig::CONFIRM_RESULT_MESSAGE_MS
     );
@@ -1477,6 +1621,11 @@ void AppController::repeatSelectedJob(UiState returnState) {
       returnState,
       AppConfig::CONFIRM_RESULT_MESSAGE_MS
     );
+    return;
+  }
+
+  if (!canSendMarlinCommand()) {
+    showCncUnavailable(returnState);
     return;
   }
 
@@ -1564,6 +1713,9 @@ void AppController::begin() {
 
 void AppController::notifyJobFinished() {
   if (_selectedJobSource != JobSource::SdCard || !_sdCard.hasSelectedJobFile()) {
+    if (AppConfig::ENABLE_BUZZER_NOTIFICATION) {
+      _buzzer.play(BuzzerHandler::Cue::Warning);
+    }
     showInfoScreen(
       "JOB SELESAI",
       "Tidak ada file",
@@ -1573,6 +1725,9 @@ void AppController::notifyJobFinished() {
     return;
   }
 
+  if (AppConfig::ENABLE_BUZZER_NOTIFICATION) {
+    _buzzer.play(BuzzerHandler::Cue::JobFinished);
+  }
   _uiState = UiState::Standby;
   showActionConfirm(
     PendingAction::RepeatJob,
@@ -1607,6 +1762,8 @@ String AppController::getLocalTimeString() const {
 }
 
 void AppController::update() {
+  _buzzer.update();
+
   if (_inputStarted) {
     updateInput();
   }
@@ -1618,6 +1775,12 @@ void AppController::update() {
   }
 
   updateMarlinCommunication();
+  MarlinConnectionState cncState = marlinConnectionState();
+  _buzzer.setAlarmActive(
+    AppConfig::ENABLE_BUZZER_MARLIN_ALARM &&
+    (cncState == MarlinConnectionState::Lost ||
+     cncState == MarlinConnectionState::Error)
+  );
 
   // Logika Long Press Jogging
   if (_activeJogPin != 0 && _uiState == UiState::SetOrigin) {
@@ -1644,6 +1807,7 @@ void AppController::update() {
   }
 
   updateNetwork();
+  refreshStandbyNetworkStatus();
   if (_storageStarted) {
     updateStorageFileDisplay();
   }
@@ -1654,6 +1818,10 @@ void AppController::update() {
 // --------------------
 
 void AppController::updateMarlinCommunication() {
+  if (!_marlinConnectionEnabled) {
+    return;
+  }
+
   bool setOriginControlActive =
     _uiState == UiState::SetOrigin &&
     AppConfig::ENABLE_SET_ORIGIN_CONTROL;
@@ -1681,11 +1849,14 @@ void AppController::updateMarlinCommunication() {
     if (millis() - _lastM114Request > AppConfig::MARLIN_STATUS_POLL_MS) {
       Serial1.println("M114");
       _lastM114Request = millis();
+      if (_marlinMonitorStartedAt == 0) {
+        _marlinMonitorStartedAt = _lastM114Request;
+      }
       _lastMarlinStatusPoll = _lastM114Request;
     }
   }
 
-  if (_uiState == UiState::MachineStatus) {
+  if (_uiState == UiState::MachineStatus && isMarlinResponding()) {
     if (!_machineFeedrateLoaded) {
       requestMachineFeedrateStatus();
     }
@@ -1712,6 +1883,14 @@ void AppController::parseMarlinResponse(const String &line) {
   _lastMarlinResponseMs = millis();
   _marlinEverResponded = true;
 
+  String lowerLine = line;
+  lowerLine.toLowerCase();
+  if (lowerLine.startsWith("error:") ||
+      lowerLine.startsWith("!!") ||
+      lowerLine.startsWith("alarm:")) {
+    _marlinErrorActive = true;
+  }
+
   parseMachineFeedrateStatus(line);
   parseMachineGeometryStatus(line);
   parseHomeSensorStatus(line);
@@ -1723,6 +1902,7 @@ void AppController::parseMarlinResponse(const String &line) {
 
   // Format standar Marlin M114: "X:0.00 Y:0.00 Z:0.00 E:0.00 Count X:0 Y:0 Z:0"
   if (line.indexOf("X:") != -1 && line.indexOf("Y:") != -1 && line.indexOf("Z:") != -1) {
+    _marlinErrorActive = false;
     int xPos = line.indexOf("X:") + 2;
     int yPos = line.indexOf("Y:") + 2;
     int zPos = line.indexOf("Z:") + 2;
@@ -1754,6 +1934,14 @@ void AppController::parseMarlinResponse(const String &line) {
 void AppController::onButtonPressed(uint8_t buttonNumber) {
   Serial.print("Event tombol dikirim ke aplikasi: ");
   Serial.println(buttonNumber);
+
+  if (AppConfig::ENABLE_BUZZER_KEY_FEEDBACK) {
+    if (buttonNumber == (uint8_t)PinConfig::BTN_ENTER) {
+      _buzzer.play(BuzzerHandler::Cue::Select);
+    } else if (buttonNumber == (uint8_t)PinConfig::BTN_BACK) {
+      _buzzer.play(BuzzerHandler::Cue::Back);
+    }
+  }
 
   if (_uiState == UiState::Info) {
     if (buttonNumber == (uint8_t)PinConfig::BTN7 ||
@@ -1909,7 +2097,7 @@ void AppController::handleJog(uint8_t pin, float distance) {
   else if (axis == 'Y') _posY += moveVal;
   else if (axis == 'Z') _posZ += moveVal;
 
-  if (AppConfig::ENABLE_SET_ORIGIN_CONTROL) {
+  if (AppConfig::ENABLE_SET_ORIGIN_CONTROL && canSendMarlinCommand()) {
     // Kirim G-Code ke SKR (G91 = Relative Positioning)
     Serial1.println("G91");
     Serial1.print("G1 ");
@@ -1970,7 +2158,11 @@ void AppController::confirmSetOrigin(UiState returnState) {
   _activeJogPin = 0;
   _isJogAdjusting = false;
 
-  if (AppConfig::ENABLE_SET_ORIGIN_CONTROL) {
+  bool commandSent =
+    AppConfig::ENABLE_SET_ORIGIN_CONTROL &&
+    canSendMarlinCommand();
+
+  if (commandSent) {
     Serial1.println("M400");
     Serial1.println("G92 X0 Y0 Z0");
 
@@ -1989,7 +2181,7 @@ void AppController::confirmSetOrigin(UiState returnState) {
 
   const char *resultTitle = "Set Origin: simulasi";
   const char *resultMessage = "SoftEnd: OFF";
-  if (AppConfig::ENABLE_SET_ORIGIN_CONTROL) {
+  if (commandSent) {
     resultTitle = "Set Origin: selesai";
     resultMessage = AppConfig::ENABLE_SOFT_ENDSTOP_ON_SET_ORIGIN
       ? "SoftEnd: ON"
@@ -2039,6 +2231,9 @@ void AppController::processSelectAction() {
 
     if (choice == "Select Job") {
       if (!_sdCard.isReady()) {
+        if (AppConfig::ENABLE_BUZZER_NOTIFICATION) {
+          _buzzer.play(BuzzerHandler::Cue::Warning);
+        }
         showInfoScreen("SD CARD", "Belum siap");
         return;
       }
@@ -2092,6 +2287,8 @@ void AppController::processSelectAction() {
     if (choice == "Spindle ON (M3)") {
       if (AppConfig::UI_DEVELOPMENT_MODE) {
         showInfoScreen("UI PREVIEW", "M3 belum dikirim");
+      } else if (!canSendMarlinCommand()) {
+        showCncUnavailable(UiState::Menu);
       } else {
         Serial1.println("M3");
         showInfoScreen("SPINDLE", "M3 dikirim");
@@ -2102,6 +2299,8 @@ void AppController::processSelectAction() {
     if (choice == "Spindle OFF (M5)") {
       if (AppConfig::UI_DEVELOPMENT_MODE) {
         showInfoScreen("UI PREVIEW", "M5 belum dikirim");
+      } else if (!canSendMarlinCommand()) {
+        showCncUnavailable(UiState::Menu);
       } else {
         Serial1.println("M5");
         showInfoScreen("SPINDLE", "M5 dikirim");
@@ -2139,7 +2338,8 @@ void AppController::processSelectAction() {
     }
 
     if (choice == "About Firmware") {
-      showInfoScreen("CNC INTERFACE", "ESP32-S3 + Marlin");
+      String version = String("Firmware v") + AppConfig::FIRMWARE_VERSION;
+      showInfoScreen(AppConfig::FIRMWARE_NAME, version.c_str());
       return;
     }
 
@@ -2340,6 +2540,10 @@ void AppController::onEncoderTurned(int8_t direction) {
 void AppController::onEncoderPressed() {
   Serial.println("Encoder digunakan sebagai OK / Select");
 
+  if (AppConfig::ENABLE_BUZZER_KEY_FEEDBACK) {
+    _buzzer.play(BuzzerHandler::Cue::Select);
+  }
+
   // Perform unified select action (same as BTN7)
   processSelectAction();
 }
@@ -2433,6 +2637,12 @@ void AppController::beginSerial() {
   // Initialize secondary UART (Serial1) to communicate with BTT via pins defined in AppConfig
   // Use pin definitions from PinConfig for Serial1 (UART to CNC controller)
   Serial1.begin(AppConfig::BTT_UART_BAUD, SERIAL_8N1, PinConfig::CNC_UART_RX, PinConfig::CNC_UART_TX);
+  Serial.println();
+  Serial.print("[");
+  Serial.print(AppConfig::FIRMWARE_NAME);
+  Serial.print("] Firmware v");
+  Serial.println(AppConfig::FIRMWARE_VERSION);
+  Serial.println(AppConfig::FIRMWARE_DESCRIPTION);
   Serial.println("AppController: Serial1 initialized for BTT");
 }
 
@@ -2440,9 +2650,10 @@ void AppController::beginDisplay(bool holdBootScreen) {
   Serial.println("AppController: beginDisplay()");
   _lcd.begin();
   Serial.println("AppController: LcdHandler.begin() returned");
+  String bootSubtitle = String("Version ") + AppConfig::FIRMWARE_VERSION;
   _lcd.showBootSplash(
     AppConfig::BOOT_TITLE,
-    AppConfig::BOOT_SUBTITLE,
+    bootSubtitle.c_str(),
     AppConfig::BOOT_FOOTER,
     AppConfig::BOOT_SPLASH_MS
   );
@@ -2467,6 +2678,20 @@ void AppController::beginInput() {
   _encoder.setTurnCallback(handleEncoderTurned);
   _encoder.setPressCallback(handleEncoderPressed);
   _inputStarted = true;
+}
+
+void AppController::beginBuzzer() {
+  _buzzer.begin();
+}
+
+void AppController::beginMarlinConnection() {
+  _marlinConnectionEnabled = true;
+  _marlinEverResponded = false;
+  _marlinErrorActive = false;
+  _lastMarlinResponseMs = 0;
+  _marlinMonitorStartedAt = 0;
+  _lastM114Request = 0;
+  Serial.println("[CNC] Komunikasi Marlin aktif");
 }
 
 void AppController::beginStorage() {

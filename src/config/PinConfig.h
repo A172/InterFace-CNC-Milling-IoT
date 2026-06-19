@@ -49,6 +49,9 @@ namespace PinConfig {
   constexpr uint8_t ENCODER_DT = 3;    // Data (B)
   constexpr uint8_t ENCODER_SW = 10;   // Switch (tekan)
   // CATATAN: COM encoder terhubung ke GND
+
+  // ========== Passive Buzzer (PWM) ==========
+  constexpr uint8_t BUZZER = 38;
 }
 
 #endif

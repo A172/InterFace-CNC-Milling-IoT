@@ -23,7 +23,7 @@ class LcdHandler {
     );
     void showList(const char *title, const std::vector<String> &items, size_t offset = 0);
   // Show three-line standby layout: top, middle, bottom
-  void showStandbyLines(const char *top, const char *middle, const char *bottom, const char *eta = nullptr, const char *jobName = nullptr, int progress = -1, const char *timeStr = nullptr);
+  void showStandbyLines(const char *top, const char *middle, const char *bottom, const char *eta = nullptr, const char *jobName = nullptr, int progress = -1, const char *timeStr = nullptr, const char *networkStatus = nullptr);
   // Show a menu with a selected index (draws a '>' marker on selected row)
   void showMenu(const char *title, const std::vector<String> &items, size_t selected, size_t offset = 0);
   // Show a confirmation dialog with two choices (Yes/No). selectedIndex is 0 for Yes, 1 for No

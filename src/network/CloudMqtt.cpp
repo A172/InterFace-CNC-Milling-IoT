@@ -1,7 +1,7 @@
 #include "CloudMqtt.h"
 
 #include <WiFi.h>
-#include "../config/AppConfig.h"
+#include "../config/MqttConfig.h"
 
 namespace {
   CloudMqtt *activeMqtt = nullptr;
@@ -49,14 +49,14 @@ namespace {
 
 bool CloudMqtt::begin() {
   ensureConfigured();
-  _clientId = String(AppConfig::MQTT_CLIENT_ID) + "-" + macSuffix();
+  _clientId = String(MqttConfig::CLIENT_ID) + "-" + macSuffix();
   _baseTopic = _topicPrefix;
 
   _mqttClient.setClient(_wifiClient);
   _mqttClient.setServer(_broker.c_str(), _port);
   _mqttClient.setCallback(mqttCallback);
   _mqttClient.setBufferSize(2048);
-  _mqttClient.setSocketTimeout(AppConfig::MQTT_SOCKET_TIMEOUT_SEC);
+  _mqttClient.setSocketTimeout(MqttConfig::SOCKET_TIMEOUT_SEC);
   activeMqtt = this;
 
   return connect();
@@ -72,15 +72,15 @@ void CloudMqtt::configure(
   _broker = broker;
   _broker.trim();
   if (_broker.length() == 0) {
-    _broker = AppConfig::MQTT_BROKER;
+    _broker = MqttConfig::BROKER;
   }
 
-  _port = port == 0 ? AppConfig::MQTT_PORT : port;
+  _port = port == 0 ? MqttConfig::PORT : port;
 
   _topicPrefix = topicPrefix;
   _topicPrefix.trim();
   if (_topicPrefix.length() == 0) {
-    _topicPrefix = AppConfig::MQTT_TOPIC_PREFIX;
+    _topicPrefix = MqttConfig::TOPIC_PREFIX;
   }
   while (_topicPrefix.endsWith("/")) {
     _topicPrefix.remove(_topicPrefix.length() - 1);
@@ -98,7 +98,11 @@ void CloudMqtt::update() {
     return;
   }
 
-  if (millis() - _lastReconnectAttempt < AppConfig::MQTT_RECONNECT_INTERVAL_MS) {
+  if (_lastState == MQTT_CONNECTED) {
+    _lastState = _mqttClient.state();
+  }
+
+  if (millis() - _lastReconnectAttempt < MqttConfig::RECONNECT_INTERVAL_MS) {
     return;
   }
 
@@ -111,7 +115,6 @@ bool CloudMqtt::isConnected() {
 }
 
 int CloudMqtt::state() {
-  _lastState = _mqttClient.state();
   return _lastState;
 }
 
@@ -151,15 +154,15 @@ String CloudMqtt::statusText() {
 }
 
 String CloudMqtt::broker() const {
-  return _broker.length() ? _broker : String(AppConfig::MQTT_BROKER);
+  return _broker.length() ? _broker : String(MqttConfig::BROKER);
 }
 
 uint16_t CloudMqtt::port() const {
-  return _port == 0 ? AppConfig::MQTT_PORT : _port;
+  return _port == 0 ? MqttConfig::PORT : _port;
 }
 
 String CloudMqtt::topicPrefix() const {
-  return _topicPrefix.length() ? _topicPrefix : String(AppConfig::MQTT_TOPIC_PREFIX);
+  return _topicPrefix.length() ? _topicPrefix : String(MqttConfig::TOPIC_PREFIX);
 }
 
 void CloudMqtt::disconnect() {
@@ -167,6 +170,7 @@ void CloudMqtt::disconnect() {
     return;
   }
 
+  publishConnectionStatus(false, "offline");
   _mqttClient.disconnect();
   _lastState = MQTT_DISCONNECTED;
 }
@@ -180,8 +184,10 @@ void CloudMqtt::publishMonitoring(const MqttMonitoringSnapshot &snapshot) {
 
   publishNetwork(snapshot, !_networkPublished);
   publishPosition(snapshot, now);
+  publishProgress(snapshot, now);
   publishTime(snapshot, now);
   publishAlarm(snapshot);
+  publishError(snapshot);
 }
 
 bool CloudMqtt::connect() {
@@ -196,6 +202,9 @@ bool CloudMqtt::connect() {
     return false;
   }
 
+  String statusTopic = topicName(MqttConfig::TOPIC_STATUS);
+  const char *offlinePayload = "{\"connected\":false,\"state\":\"offline\"}";
+
   Serial.print("Menghubungkan MQTT ke ");
   Serial.print(_broker);
   Serial.print(":");
@@ -206,10 +215,20 @@ bool CloudMqtt::connect() {
     connected = _mqttClient.connect(
       _clientId.c_str(),
       _user.c_str(),
-      _password.c_str()
+      _password.c_str(),
+      statusTopic.c_str(),
+      1,
+      true,
+      offlinePayload
     );
   } else {
-    connected = _mqttClient.connect(_clientId.c_str());
+    connected = _mqttClient.connect(
+      _clientId.c_str(),
+      statusTopic.c_str(),
+      1,
+      true,
+      offlinePayload
+    );
   }
 
   if (!connected) {
@@ -222,14 +241,40 @@ bool CloudMqtt::connect() {
   _lastState = MQTT_CONNECTED;
   _networkPublished = false;
   _lastPositionPublish = 0;
+  _lastProgressPublish = 0;
   _lastTimePublish = 0;
+  _lastProgressPayload = "";
   _lastNetworkPayload = "";
   _lastTimePayload = "";
   _lastAlarmPayload = "";
+  _lastErrorPayload = "";
+
+  subscribeInboundTopics();
+  publishConnectionStatus(true, "online");
 
   Serial.print("MQTT terhubung. Base topic: ");
   Serial.println(_baseTopic);
   return true;
+}
+
+bool CloudMqtt::subscribeInboundTopics() {
+  String commandTopic = topicName(MqttConfig::TOPIC_COMMAND);
+  String gcodeTopic = topicName(MqttConfig::TOPIC_GCODE);
+  bool commandReady = _mqttClient.subscribe(commandTopic.c_str(), 1);
+  bool gcodeReady = _mqttClient.subscribe(gcodeTopic.c_str(), 1);
+
+  Serial.print("MQTT subscribe ");
+  Serial.print(commandTopic);
+  Serial.println(commandReady ? " OK" : " GAGAL");
+  Serial.print("MQTT subscribe ");
+  Serial.print(gcodeTopic);
+  Serial.println(gcodeReady ? " OK" : " GAGAL");
+
+  return commandReady && gcodeReady;
+}
+
+String CloudMqtt::topicName(const char *suffix) const {
+  return _baseTopic + "/" + suffix;
 }
 
 bool CloudMqtt::publishJson(const String &topicSuffix, const String &payload, bool retained) {
@@ -237,8 +282,14 @@ bool CloudMqtt::publishJson(const String &topicSuffix, const String &payload, bo
     return false;
   }
 
-  String topic = _baseTopic + "/" + topicSuffix;
+  String topic = topicName(topicSuffix.c_str());
   return _mqttClient.publish(topic.c_str(), payload.c_str(), retained);
+}
+
+void CloudMqtt::publishConnectionStatus(bool connected, const char *state) {
+  String payload = String("{\"connected\":") + (connected ? "true" : "false") +
+                   ",\"state\":\"" + escapeJson(state) + "\"}";
+  publishJson(MqttConfig::TOPIC_STATUS, payload, true);
 }
 
 void CloudMqtt::publishNetwork(const MqttMonitoringSnapshot &snapshot, bool force) {
@@ -251,13 +302,13 @@ void CloudMqtt::publishNetwork(const MqttMonitoringSnapshot &snapshot, bool forc
     return;
   }
 
-  publishJson("network", payload, true);
+  publishJson(MqttConfig::TOPIC_NETWORK, payload, true);
   _lastNetworkPayload = payload;
   _networkPublished = true;
 }
 
 void CloudMqtt::publishPosition(const MqttMonitoringSnapshot &snapshot, unsigned long now) {
-  if (now - _lastPositionPublish < AppConfig::MQTT_POSITION_INTERVAL_MS) {
+  if (now - _lastPositionPublish < MqttConfig::POSITION_INTERVAL_MS) {
     return;
   }
 
@@ -266,8 +317,28 @@ void CloudMqtt::publishPosition(const MqttMonitoringSnapshot &snapshot, unsigned
                    ",\"z\":" + floatJson(snapshot.posZ) +
                    ",\"unit\":\"mm\"}";
 
-  publishJson("position", payload, true);
+  publishJson(MqttConfig::TOPIC_POSITION, payload, true);
   _lastPositionPublish = now;
+}
+
+void CloudMqtt::publishProgress(const MqttMonitoringSnapshot &snapshot, unsigned long now) {
+  String payload;
+  if (snapshot.progress < 0) {
+    payload = "{\"progress\":null,\"state\":\"idle\"}";
+  } else {
+    int progress = constrain(snapshot.progress, 0, 100);
+    payload = String("{\"progress\":") + String(progress) +
+              ",\"state\":\"running\"}";
+  }
+
+  if (payload == _lastProgressPayload &&
+      now - _lastProgressPublish < MqttConfig::PROGRESS_INTERVAL_MS) {
+    return;
+  }
+
+  publishJson(MqttConfig::TOPIC_PROGRESS, payload, true);
+  _lastProgressPayload = payload;
+  _lastProgressPublish = now;
 }
 
 void CloudMqtt::publishTime(const MqttMonitoringSnapshot &snapshot, unsigned long now) {
@@ -277,11 +348,11 @@ void CloudMqtt::publishTime(const MqttMonitoringSnapshot &snapshot, unsigned lon
                    "\"}";
 
   if (payload == _lastTimePayload &&
-      now - _lastTimePublish < AppConfig::MQTT_TIME_INTERVAL_MS) {
+      now - _lastTimePublish < MqttConfig::TIME_INTERVAL_MS) {
     return;
   }
 
-  publishJson("time", payload, true);
+  publishJson(MqttConfig::TOPIC_TIME, payload, true);
   _lastTimePayload = payload;
   _lastTimePublish = now;
 }
@@ -290,9 +361,18 @@ void CloudMqtt::publishAlarm(const MqttMonitoringSnapshot &snapshot) {
   String level = "INFO";
   String message = "OK";
 
-  if (snapshot.marlinStatus == "NO RESP") {
+  if (snapshot.marlinStatus == "LOST") {
     level = "ERROR";
-    message = "Marlin no response";
+    message = "Marlin connection lost";
+  } else if (snapshot.marlinStatus == "ERROR") {
+    level = "ERROR";
+    message = "Marlin error";
+  } else if (snapshot.marlinStatus == "DISCONNECTED") {
+    message = "Marlin not connected";
+  } else if (snapshot.marlinStatus == "WAITING") {
+    message = "Waiting for Marlin";
+  } else if (snapshot.marlinStatus == "OFF") {
+    message = "Marlin connection disabled";
   }
 
   String payload = String("{\"level\":\"") + level +
@@ -303,8 +383,27 @@ void CloudMqtt::publishAlarm(const MqttMonitoringSnapshot &snapshot) {
     return;
   }
 
-  publishJson("alarm", payload, true);
+  publishJson(MqttConfig::TOPIC_ALARM, payload, true);
   _lastAlarmPayload = payload;
+}
+
+void CloudMqtt::publishError(const MqttMonitoringSnapshot &snapshot) {
+  bool connectionLost = snapshot.marlinStatus == "LOST";
+  bool marlinError = snapshot.marlinStatus == "ERROR";
+  bool active = connectionLost || marlinError;
+  const char *message = connectionLost
+    ? "Marlin connection lost"
+    : (marlinError ? "Marlin error" : "");
+  String payload = String("{\"active\":") + (active ? "true" : "false") +
+                   ",\"message\":\"" +
+                   message + "\"}";
+
+  if (payload == _lastErrorPayload) {
+    return;
+  }
+
+  publishJson(MqttConfig::TOPIC_ERROR, payload, true);
+  _lastErrorPayload = payload;
 }
 
 void CloudMqtt::ensureConfigured() {
@@ -312,9 +411,9 @@ void CloudMqtt::ensureConfigured() {
       _port == 0 ||
       _topicPrefix.length() == 0) {
     configure(
-      _broker.length() ? _broker : String(AppConfig::MQTT_BROKER),
-      _port == 0 ? AppConfig::MQTT_PORT : _port,
-      _topicPrefix.length() ? _topicPrefix : String(AppConfig::MQTT_TOPIC_PREFIX),
+      _broker.length() ? _broker : String(MqttConfig::BROKER),
+      _port == 0 ? MqttConfig::PORT : _port,
+      _topicPrefix.length() ? _topicPrefix : String(MqttConfig::TOPIC_PREFIX),
       _user,
       _password
     );
@@ -323,12 +422,12 @@ void CloudMqtt::ensureConfigured() {
 
 bool CloudMqtt::brokerReachable() {
   WiFiClient probe;
-  probe.setTimeout(AppConfig::MQTT_SOCKET_TIMEOUT_SEC);
+  probe.setTimeout(MqttConfig::SOCKET_TIMEOUT_SEC);
 
   bool reachable = probe.connect(
     _broker.c_str(),
     _port,
-    AppConfig::MQTT_CONNECT_TIMEOUT_MS
+    MqttConfig::CONNECT_TIMEOUT_MS
   );
   probe.stop();
 
@@ -351,8 +450,21 @@ void CloudMqtt::handleMessage(char *topic, byte *payload, unsigned int length) {
     message += static_cast<char>(payload[i]);
   }
 
-  Serial.print("MQTT message ignored [");
-  Serial.print(topic);
-  Serial.print("]: ");
+  String incomingTopic(topic);
+  if (incomingTopic == topicName(MqttConfig::TOPIC_COMMAND)) {
+    Serial.print("[MQTT][COMMAND] ");
+    Serial.println(message);
+    return;
+  }
+
+  if (incomingTopic == topicName(MqttConfig::TOPIC_GCODE)) {
+    Serial.print("[MQTT][GCODE] ");
+    Serial.println(message);
+    return;
+  }
+
+  Serial.print("[MQTT][IGNORED] ");
+  Serial.print(incomingTopic);
+  Serial.print(" = ");
   Serial.println(message);
 }

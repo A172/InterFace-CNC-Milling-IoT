@@ -139,7 +139,7 @@ void LcdHandler::showWifiSetup(const char *apName) {
   _lcd->sendBuffer();
 }
 
-void LcdHandler::showStandbyLines(const char *top, const char *middle, const char *bottom, const char *eta, const char *jobName, int progress, const char *timeStr) {
+void LcdHandler::showStandbyLines(const char *top, const char *middle, const char *bottom, const char *eta, const char *jobName, int progress, const char *timeStr, const char *networkStatus) {
   if (_lcd == nullptr) return;
 
   _lcd->clearBuffer();
@@ -169,6 +169,17 @@ void LcdHandler::showStandbyLines(const char *top, const char *middle, const cha
     char pStr[8];
     snprintf(pStr, sizeof(pStr), "%d%%", pct);
     _lcd->drawStr(104, 40, pStr);
+  } else if (networkStatus != nullptr && strlen(networkStatus) > 0) {
+    // Mulai tepat di bawah label Y dan gunakan font ramping agar dua status muat.
+    const char *yLabel = strstr(middle, "Y:");
+    int16_t statusX = 54;
+    if (yLabel != nullptr) {
+      String xPrefix = String(middle).substring(0, yLabel - middle);
+      statusX = _lcd->getStrWidth(xPrefix.c_str());
+    }
+    _lcd->setFont(u8g2_font_5x8_tf);
+    _lcd->drawStr(statusX, 40, networkStatus);
+    _lcd->setFont(u8g2_font_6x10_tf);
   }
 
   // Baris 4-5: Status job dan estimasi waktu kerja.
