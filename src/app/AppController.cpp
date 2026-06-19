@@ -1658,9 +1658,7 @@ void AppController::updateMarlinCommunication() {
     _uiState == UiState::SetOrigin &&
     AppConfig::ENABLE_SET_ORIGIN_CONTROL;
   bool machineStatusActive = _uiState == UiState::MachineStatus;
-  bool standbyMonitorActive =
-    _uiState == UiState::Standby &&
-    AppConfig::ENABLE_MARLIN_STATUS_MONITOR;
+  bool marlinMonitorActive = AppConfig::ENABLE_MARLIN_STATUS_MONITOR;
 
   // 1. Baca data masuk dari Marlin
   while (Serial1.available()) {
@@ -1674,14 +1672,12 @@ void AppController::updateMarlinCommunication() {
   if (AppConfig::UI_DEVELOPMENT_MODE &&
       !setOriginControlActive &&
       !machineStatusActive &&
-      !standbyMonitorActive) {
+      !marlinMonitorActive) {
     return;
   }
 
-  // 2. Kirim permintaan posisi (M114) berkala saat standby/jog.
-  if ((_uiState == UiState::Standby &&
-       (!AppConfig::UI_DEVELOPMENT_MODE || AppConfig::ENABLE_MARLIN_STATUS_MONITOR)) ||
-      _uiState == UiState::SetOrigin) {
+  // 2. Kirim permintaan posisi (M114) berkala untuk monitoring posisi nyata Marlin.
+  if (marlinMonitorActive || setOriginControlActive || machineStatusActive) {
     if (millis() - _lastM114Request > AppConfig::MARLIN_STATUS_POLL_MS) {
       Serial1.println("M114");
       _lastM114Request = millis();

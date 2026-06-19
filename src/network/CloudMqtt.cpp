@@ -293,12 +293,6 @@ void CloudMqtt::publishAlarm(const MqttMonitoringSnapshot &snapshot) {
   if (snapshot.marlinStatus == "NO RESP") {
     level = "ERROR";
     message = "Marlin no response";
-  } else if (!snapshot.sdReady) {
-    level = "WARN";
-    message = "SD not ready";
-  } else if (snapshot.homeX == "?" || snapshot.homeY == "?" || snapshot.homeZ == "?") {
-    level = "WARN";
-    message = "Home sensor unknown";
   }
 
   String payload = String("{\"level\":\"") + level +
