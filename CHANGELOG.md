@@ -2,6 +2,9 @@
 
 ## 2026-06-20
 
+- Mengganti scrolling piksel About menjadi tiga halaman yang berganti setiap 3 detik agar mudah dibaca.
+- Mengubah indikator standby menjadi label lengkap `WiFi:[OK]/WiFi:[X]` dan `MQTT:[OK]/MQTT:[X]`.
+- Menempatkan indikator WiFi/MQTT pada satu baris khusus dan mempertahankan font koordinat `6x10`.
 - Mengurutkan Machine Ctrl&Status menjadi CNC, Home X/Y/Z, SoftEnd, Spindle, Feed XY/Z, Area X/Y/Z, lalu Refresh Status.
 - Menyesuaikan indeks handler agar navigasi dan aksi setiap item tetap benar setelah perubahan urutan.
 - Melengkapi README dengan fungsi seluruh menu/submenu yang sudah tersedia.

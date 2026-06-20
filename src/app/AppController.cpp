@@ -407,17 +407,15 @@ void AppController::showSubMenu(const char *title, const std::vector<String> &it
 
 void AppController::showAboutScreen() {
   _uiState = UiState::About;
-  _aboutScrollOffset = 0;
-  _aboutEnteredAt = millis();
-  _aboutLastScrollAt = _aboutEnteredAt;
-  _aboutEndReachedAt = 0;
+  _aboutPageIndex = 0;
+  _aboutLastPageChange = millis();
   _lcd.showAbout(
     AppConfig::FIRMWARE_NAME,
     AppConfig::FIRMWARE_VERSION,
     AppConfig::FIRMWARE_AUTHOR,
     AppConfig::FIRMWARE_AUTHOR_ID,
     AppConfig::FIRMWARE_LAST_UPDATED,
-    _aboutScrollOffset
+    _aboutPageIndex
   );
 }
 
@@ -427,29 +425,11 @@ void AppController::updateAboutScreen() {
   }
 
   unsigned long now = millis();
-  if (_aboutScrollOffset == 0 &&
-      now - _aboutEnteredAt < AppConfig::ABOUT_SCROLL_START_HOLD_MS) {
+  if (now - _aboutLastPageChange < AppConfig::ABOUT_PAGE_INTERVAL_MS) {
     return;
   }
-
-  if (_aboutScrollOffset < AppConfig::ABOUT_SCROLL_MAX_OFFSET) {
-    if (now - _aboutLastScrollAt < AppConfig::ABOUT_SCROLL_INTERVAL_MS) {
-      return;
-    }
-    _aboutLastScrollAt = now;
-    _aboutScrollOffset++;
-    if (_aboutScrollOffset == AppConfig::ABOUT_SCROLL_MAX_OFFSET) {
-      _aboutEndReachedAt = now;
-    }
-  } else {
-    if (now - _aboutEndReachedAt < AppConfig::ABOUT_SCROLL_END_HOLD_MS) {
-      return;
-    }
-    _aboutScrollOffset = 0;
-    _aboutEnteredAt = now;
-    _aboutLastScrollAt = now;
-    _aboutEndReachedAt = 0;
-  }
+  _aboutLastPageChange = now;
+  _aboutPageIndex = (_aboutPageIndex + 1) % AppConfig::ABOUT_PAGE_COUNT;
 
   _lcd.showAbout(
     AppConfig::FIRMWARE_NAME,
@@ -457,7 +437,7 @@ void AppController::updateAboutScreen() {
     AppConfig::FIRMWARE_AUTHOR,
     AppConfig::FIRMWARE_AUTHOR_ID,
     AppConfig::FIRMWARE_LAST_UPDATED,
-    _aboutScrollOffset
+    _aboutPageIndex
   );
 }
 
@@ -578,30 +558,13 @@ String AppController::standbyMarlinStatusText() const {
 }
 
 String AppController::standbyNetworkStatusText() {
-  char wifiStatus = 'X';
-  if (_wifiEnabled && _wifi.isConnected()) {
-    wifiStatus = 'V';
-  } else if (_wifiEnabled) {
-    wl_status_t state = WiFi.status();
-    if (state == WL_NO_SSID_AVAIL ||
-        state == WL_CONNECT_FAILED ||
-        state == WL_CONNECTION_LOST) {
-      wifiStatus = '?';
-    }
-  }
+  const char *wifiStatus =
+    (_wifiEnabled && _wifi.isConnected()) ? "OK" : "X";
+  const char *mqttStatus =
+    (_mqttEnabled && _cloud.isConnected()) ? "OK" : "X";
 
-  char mqttStatus = 'X';
-  if (_mqttEnabled && _cloud.isConnected()) {
-    mqttStatus = 'V';
-  } else if (_mqttEnabled) {
-    int state = _cloud.state();
-    if (state != MQTT_DISCONNECTED) {
-      mqttStatus = '?';
-    }
-  }
-
-  char status[16];
-  snprintf(status, sizeof(status), "WiFi:%c MQTT:%c", wifiStatus, mqttStatus);
+  char status[24];
+  snprintf(status, sizeof(status), "WiFi:[%s] MQTT:[%s]", wifiStatus, mqttStatus);
   return String(status);
 }
 

@@ -11,13 +11,13 @@ Firmware **AYB Interface** pada ESP32-S3 DevKitM-1 sudah memiliki UI LCD, input 
 - Passive buzzer GPIO 38 dengan PWM LEDC dan pola bunyi non-blocking.
 - Feedback bunyi untuk Enter, Back, klik rotary, warning, job selesai, dan alarm timeout Marlin.
 - Identitas `AYB Interface` digunakan secara terpusat oleh boot screen, Serial Monitor, menu About, dan dokumentasi.
-- Layar About menampilkan logo, versi, Alfath Yusuf Biyono, NIM 2141170132, dan tanggal pembaruan dengan scrolling non-blocking.
+- Layar About menampilkan tiga halaman identitas yang berganti otomatis setiap 3 detik tanpa blocking.
 - Toggle `CNC_ENABLE_MARLIN_CONNECTION` mengendalikan komunikasi UART/polling Marlin selama hardware CNC belum tersambung.
 - Standby menampilkan status `CNC:OFF/WAIT/DISC/OK/LOST/ERR`.
 - Perintah mesin diblokir sampai Marlin berstatus `CONNECTED`.
 - Standby screen menampilkan waktu, koordinat X/Y/Z, job aktif, estimasi, dan status Marlin.
 - Koordinat standby menggunakan `?` sampai posisi nyata diterima dari `M114`.
-- Standby screen menampilkan `WiFi` dan `MQTT` secara lengkap di bawah koordinat Y dengan status `V`, `X`, atau `?`.
+- Standby screen menampilkan `WiFi:[OK]/WiFi:[X]` dan `MQTT:[OK]/MQTT:[X]` pada satu baris khusus menggunakan font koordinat `6x10`.
 - Dialog konfirmasi memiliki aturan tetap: Enter = Yes, Back = No, rotary memilih dan mengeksekusi pilihan.
 - SD card browser dengan pemilihan file job.
 - Select Job langsung membuka SD card, menampilkan label/path, dan mengurutkan folder sebelum file.
@@ -46,7 +46,7 @@ Firmware **AYB Interface** pada ESP32-S3 DevKitM-1 sudah memiliki UI LCD, input 
 
 - Validasi runtime komunikasi Marlin pada hardware SKR V1.4 Turbo.
 - Validasi payload `cnc/machine` dan transisi validitas `cnc/position` melalui MQTT Explorer.
-- Validasi animasi serta tombol keluar layar About pada LCD/input hardware.
+- Validasi pergantian halaman serta tombol keluar layar About pada LCD/input hardware.
 - Validasi transisi status `WAIT`, `DISCONNECTED`, `CONNECTED`, `LOST`, dan `ERROR` pada hardware nyata.
 - Penyempurnaan machine status berbasis data nyata firmware Marlin.
 - Pemanfaatan posisi Marlin untuk workflow job yang lebih lengkap.

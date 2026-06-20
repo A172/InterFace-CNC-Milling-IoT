@@ -21,7 +21,7 @@ class LcdHandler {
       const char *author,
       const char *authorId,
       const char *lastUpdated,
-      uint8_t scrollOffset
+      uint8_t pageIndex
     );
     void showBootSplash(
       const char *title,

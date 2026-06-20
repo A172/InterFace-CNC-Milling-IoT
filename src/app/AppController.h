@@ -223,10 +223,8 @@ class AppController {
     unsigned long _lastMqttMonitorPublish = 0;
     unsigned long _infoShownAt = 0;
     unsigned long _infoAutoCloseMs = 0;
-    unsigned long _aboutEnteredAt = 0;
-    unsigned long _aboutLastScrollAt = 0;
-    unsigned long _aboutEndReachedAt = 0;
-    uint8_t _aboutScrollOffset = 0;
+    unsigned long _aboutLastPageChange = 0;
+    uint8_t _aboutPageIndex = 0;
     bool _inputStarted = false;
     bool _storageStarted = false;
     bool _networkStarted = false;

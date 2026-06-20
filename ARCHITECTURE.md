@@ -154,7 +154,7 @@ UI LCD dibagi menjadi:
 - Set Origin
 - Machine Ctrl&Status
 - Network
-- About dengan logo tetap dan teks identitas bergulir
+- About dengan tiga halaman identitas berganti otomatis setiap 3 detik
 - Dialog konfirmasi
 
 Semua alur UI dikoordinasikan oleh `AppController`.

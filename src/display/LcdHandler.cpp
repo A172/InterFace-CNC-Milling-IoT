@@ -1,6 +1,7 @@
 #include "LcdHandler.h"
 #include <vector>
 
+#include "../config/AppConfig.h"
 #include "../config/PinConfig.h"
 #include "../assets/Symbols.h"
 
@@ -151,7 +152,7 @@ void LcdHandler::showAbout(
   const char *author,
   const char *authorId,
   const char *lastUpdated,
-  uint8_t scrollOffset
+  uint8_t pageIndex
 ) {
   if (_lcd == nullptr) {
     return;
@@ -159,49 +160,56 @@ void LcdHandler::showAbout(
 
   char versionLine[24];
   char nimLine[24];
-  char updateLine[24];
+  char pageCounter[8];
   snprintf(versionLine, sizeof(versionLine), "Version %s", version);
   snprintf(nimLine, sizeof(nimLine), "NIM: %s", authorId);
-  snprintf(updateLine, sizeof(updateLine), "Update: %s", lastUpdated);
-  const char *lines[] = {
-    firmwareName,
-    versionLine,
-    "Pembuat:",
-    author,
-    nimLine,
-    updateLine
-  };
+  pageIndex %= AppConfig::ABOUT_PAGE_COUNT;
+  snprintf(
+    pageCounter,
+    sizeof(pageCounter),
+    "%u/%u",
+    pageIndex + 1,
+    AppConfig::ABOUT_PAGE_COUNT
+  );
 
   _lcd->clearBuffer();
   _lcd->setFont(u8g2_font_6x10_tf);
+  _lcd->drawStr(128 - _lcd->getStrWidth(pageCounter), 10, pageCounter);
 
-  if (Symbols::BootLogo::USE_CUSTOM_LOGO &&
-      Symbols::BootLogo::LOGO_BITMAP != nullptr) {
-    _lcd->drawXBMP(
-      (128 - Symbols::BootLogo::WIDTH) / 2,
-      0,
-      Symbols::BootLogo::WIDTH,
-      Symbols::BootLogo::HEIGHT,
-      Symbols::BootLogo::LOGO_BITMAP
-    );
-  } else {
-    _lcd->drawFrame(
-      (128 - Symbols::BootLogo::WIDTH) / 2,
-      0,
-      Symbols::BootLogo::WIDTH,
-      Symbols::BootLogo::HEIGHT
-    );
-  }
-
-  _lcd->drawHLine(0, 41, 128);
-  _lcd->setClipWindow(0, 42, 127, 63);
-  for (uint8_t index = 0; index < 6; ++index) {
-    int16_t baseline = 52 + (index * 10) - scrollOffset;
-    if (baseline > 0 && baseline < 74) {
-      _lcd->drawStr(centerX(_lcd, lines[index]), baseline, lines[index]);
+  if (pageIndex == 0) {
+    if (Symbols::BootLogo::USE_CUSTOM_LOGO &&
+        Symbols::BootLogo::LOGO_BITMAP != nullptr) {
+      _lcd->drawXBMP(
+        (128 - Symbols::BootLogo::WIDTH) / 2,
+        0,
+        Symbols::BootLogo::WIDTH,
+        Symbols::BootLogo::HEIGHT,
+        Symbols::BootLogo::LOGO_BITMAP
+      );
+    } else {
+      _lcd->drawFrame(
+        (128 - Symbols::BootLogo::WIDTH) / 2,
+        0,
+        Symbols::BootLogo::WIDTH,
+        Symbols::BootLogo::HEIGHT
+      );
     }
+    _lcd->drawHLine(0, 41, 128);
+    _lcd->drawStr(centerX(_lcd, firmwareName), 52, firmwareName);
+    _lcd->drawStr(centerX(_lcd, versionLine), 63, versionLine);
+  } else if (pageIndex == 1) {
+    _lcd->drawStr(centerX(_lcd, "PEMBUAT"), 11, "PEMBUAT");
+    _lcd->drawHLine(0, 14, 128);
+    _lcd->drawStr(centerX(_lcd, author), 32, author);
+    _lcd->drawStr(centerX(_lcd, nimLine), 48, nimLine);
+    _lcd->drawStr(centerX(_lcd, firmwareName), 62, firmwareName);
+  } else {
+    _lcd->drawStr(centerX(_lcd, "FIRMWARE INFO"), 11, "FIRMWARE INFO");
+    _lcd->drawHLine(0, 14, 128);
+    _lcd->drawStr(centerX(_lcd, "Update terakhir:"), 31, "Update terakhir:");
+    _lcd->drawStr(centerX(_lcd, lastUpdated), 46, lastUpdated);
+    _lcd->drawStr(centerX(_lcd, versionLine), 62, versionLine);
   }
-  _lcd->setMaxClipWindow();
   _lcd->sendBuffer();
 }
 
@@ -220,51 +228,45 @@ void LcdHandler::showStandbyLines(const char *top, const char *middle, const cha
   _lcd->drawHLine(0, 12, 128);
 
   // Baris 2: Koordinat X & Y
-  _lcd->drawStr(0, 26, middle);
+  _lcd->drawStr(0, 24, middle);
 
   // Baris 3: Koordinat Z & Progress Bar
-  _lcd->drawStr(0, 40, bottom);
+  _lcd->drawStr(0, 35, bottom);
 
   if (progress >= 0) {
     // Gambar Bar Progres di sisi kanan koordinat Z
     uint8_t pct = (progress > 100) ? 100 : (progress < 0 ? 0 : progress);
-    _lcd->drawFrame(65, 34, 35, 6);             // Bingkai bar (lebar 35px agar muat)
-    _lcd->drawBox(67, 36, (pct * 31) / 100, 2); // Isi bar
+    _lcd->drawFrame(65, 29, 35, 6);             // Bingkai bar (lebar 35px agar muat)
+    _lcd->drawBox(67, 31, (pct * 31) / 100, 2); // Isi bar
 
     // Teks Persenan di pojok kanan
     char pStr[8];
     snprintf(pStr, sizeof(pStr), "%d%%", pct);
-    _lcd->drawStr(104, 40, pStr);
-  } else if (networkStatus != nullptr && strlen(networkStatus) > 0) {
-    // Mulai tepat di bawah label Y dan gunakan font ramping agar dua status muat.
-    const char *yLabel = strstr(middle, "Y:");
-    int16_t statusX = 54;
-    if (yLabel != nullptr) {
-      String xPrefix = String(middle).substring(0, yLabel - middle);
-      statusX = _lcd->getStrWidth(xPrefix.c_str());
-    }
-    _lcd->setFont(u8g2_font_5x8_tf);
-    _lcd->drawStr(statusX, 40, networkStatus);
-    _lcd->setFont(u8g2_font_6x10_tf);
+    _lcd->drawStr(104, 35, pStr);
   }
 
-  // Baris 4-5: Status job dan estimasi waktu kerja.
+  // Baris jaringan memakai lebar penuh agar label lengkap tetap memakai font 6x10.
+  if (networkStatus != nullptr && strlen(networkStatus) > 0) {
+    _lcd->drawStr(centerX(_lcd, networkStatus), 46, networkStatus);
+  }
+
+  // Baris 5-6: Status job dan estimasi waktu kerja.
   if (jobName != nullptr && strlen(jobName) > 0) {
-    _lcd->drawStr(0, 50, fitText(jobName, LCD_MAX_CHARS).c_str());
+    _lcd->drawStr(0, 55, fitText(jobName, LCD_MAX_CHARS).c_str());
 
     if (eta != nullptr && strlen(eta) > 0) {
       String estimateLine = "Estimasi: ";
       estimateLine += eta;
-      _lcd->drawStr(0, 62, fitText(estimateLine, LCD_MAX_CHARS).c_str());
+      _lcd->drawStr(0, 64, fitText(estimateLine, LCD_MAX_CHARS).c_str());
     }
   } else if (eta != nullptr && strlen(eta) > 0) {
     String estimateLine = "Estimasi: ";
     estimateLine += eta;
-    _lcd->drawStr(0, 58, fitText(estimateLine, LCD_MAX_CHARS).c_str());
+    _lcd->drawStr(0, 64, fitText(estimateLine, LCD_MAX_CHARS).c_str());
   } else {
     // Posisi Zzz tetap sesuai perbaikan manual Anda
     _lcd->setFont(u8g2_font_ncenB14_tr);
-    _lcd->drawStr(50, 58, "Zzz");
+    _lcd->drawStr(50, 64, "Zzz");
     _lcd->setFont(u8g2_font_6x10_tf);
   }
 

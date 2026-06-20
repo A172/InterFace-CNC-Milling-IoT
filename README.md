@@ -76,7 +76,7 @@ ESP32-S3 CNC Interface
 - Sinkronisasi waktu NTP WIB dan penggunaan waktu internal ESP32 setelah sinkron.
 - MQTT monitoring lokal ke Mosquitto.
 - Monitoring state mesin melalui topic retained `cnc/machine`.
-- Layar About bergulir dengan logo dan identitas pengembang.
+- Layar About tiga halaman dengan logo dan identitas pengembang.
 - Feedback buzzer non-blocking untuk navigasi, job selesai, warning, dan alarm Marlin.
 
 ### Passive Buzzer
@@ -114,11 +114,10 @@ Mode standby adalah tampilan utama setelah boot. Informasi yang ditampilkan:
 
 Format indikator koneksi:
 
-- `WiFi:V` / `MQTT:V` berarti tersambung.
-- `WiFi:X` / `MQTT:X` berarti mati atau belum tersambung.
-- `WiFi:?` / `MQTT:?` berarti terjadi error koneksi.
+- `WiFi:[OK]` berarti WiFi terhubung dan `WiFi:[X]` berarti tidak terhubung/nonaktif.
+- `MQTT:[OK]` berarti MQTT terhubung ke broker dan `MQTT:[X]` berarti tidak terhubung/nonaktif.
 
-Teks `WiFi` dimulai sejajar di bawah label koordinat `Y`. Huruf `V` dipakai sebagai simbol centang yang kompatibel dengan font LCD. Saat progress job tampil, area indikator dipakai oleh progress bar.
+Indikator tampil pada satu baris khusus di bawah koordinat dengan format `WiFi:[...] MQTT:[...]`. Font tetap `6x10`, sama seperti koordinat, dan indikator tetap terlihat saat progress job tampil.
 
 Nilai koordinat X/Y/Z hanya dianggap valid setelah respons `M114` diterima saat CNC berstatus `CONNECTED`. Jika mesin belum tersambung, standby menampilkan `?` untuk setiap koordinat.
 
@@ -231,15 +230,13 @@ Saat `Reset WiFi` dikonfirmasi, credential lama dihapus dan portal `CNC-Interfac
 
 ### About
 
-Menu About menampilkan logo firmware di tengah atas serta informasi yang bergulir otomatis di bawahnya:
+Menu About menggunakan tiga halaman yang berganti otomatis setiap 3 detik:
 
-- Nama firmware `AYB Interface`.
-- Versi firmware.
-- Nama pembuat `Alfath Yusuf Biyono`.
-- NIM `2141170132`.
-- Tanggal pembaruan firmware terakhir.
+1. Logo firmware, nama `AYB Interface`, dan versi firmware.
+2. Nama pembuat `Alfath Yusuf Biyono` dan NIM `2141170132`.
+3. Tanggal pembaruan firmware terakhir dan versi firmware.
 
-Layar About dapat ditutup menggunakan tombol Enter, tombol Back, atau klik rotary encoder. Animasi scrolling menggunakan `millis()` dan tidak menghentikan loop utama.
+Setiap halaman menampilkan nomor halaman agar urutannya jelas. Layar About dapat ditutup menggunakan tombol Enter, tombol Back, atau klik rotary encoder. Pergantian halaman menggunakan `millis()` dan tidak menghentikan loop utama.
 
 ### Dialog Konfirmasi
 

@@ -88,10 +88,8 @@ namespace AppConfig {
   constexpr unsigned long BUTTON_JOG_REPEAT_MS = 500;  // Repeat setiap tombol ditahan
   constexpr unsigned long UI_UPDATE_INTERVAL_MS = 100; // Refresh UI rate
   constexpr unsigned long CONFIRM_RESULT_MESSAGE_MS = 1500; // Lama pesan hasil konfirmasi tampil
-  constexpr unsigned long ABOUT_SCROLL_INTERVAL_MS = 100;
-  constexpr unsigned long ABOUT_SCROLL_START_HOLD_MS = 1200;
-  constexpr unsigned long ABOUT_SCROLL_END_HOLD_MS = 1500;
-  constexpr uint8_t ABOUT_SCROLL_MAX_OFFSET = 50;
+  constexpr unsigned long ABOUT_PAGE_INTERVAL_MS = 3000;
+  constexpr uint8_t ABOUT_PAGE_COUNT = 3;
 
   // ========== PASSIVE BUZZER ==========
   constexpr bool ENABLE_BUZZER_KEY_FEEDBACK = true;
