@@ -18,6 +18,7 @@ enum class JobSource {
 #include "../display/LcdHandler.h"
 #include "../input/ButtonHandler.h"
 #include "../input/EncoderHandler.h"
+#include "../job/GcodeJobController.h"
 #include "../output/BuzzerHandler.h"
 #include "../network/CloudMqtt.h"
 #include "../network/WifiPortal.h"
@@ -83,6 +84,7 @@ class AppController {
     LcdHandler _lcd;
     Menu _menu;
     SdCardReader _sdCard;
+    GcodeJobController _job;
 
     // UI state
     enum class UiState {
@@ -123,6 +125,7 @@ class AppController {
     HomeAll,
     SetOrigin,
     RepeatJob,
+    StartJob,
     SpindleToggle,
     ToggleWifi,
     ToggleMqtt,
@@ -208,6 +211,10 @@ class AppController {
   void cancelActionConfirm();
   void executeConfirmedAction();
   void repeatSelectedJob(UiState returnState);
+  bool startSelectedJob(bool returnToOrigin, UiState returnState);
+  void updateJobControl();
+  void updateStandbyJobButtons();
+  void showJobControlMessage(const char *message);
   bool isConfirmationState() const;
   void acceptConfirmation();
   void rejectConfirmation();
@@ -279,6 +286,7 @@ class AppController {
     unsigned long _marlinMonitorStartedAt = 0;
     unsigned long _lastMarlinStatusPoll = 0;
     unsigned long _lastStatusScreenRefresh = 0;
+    unsigned long _lastJobScreenRefresh = 0;
     void updateMarlinCommunication();
     void parseMarlinResponse(const String &line);
 
@@ -292,6 +300,11 @@ class AppController {
     uint32_t _jogStartTime = 0;
     bool _jogLongPressHandled = false;
     uint32_t _lastJogRepeatTick = 0;
+    uint8_t _activeStandbyJobPin = 0;
+    uint32_t _standbyJobPressStartedAt = 0;
+    bool _standbyJobLongPressHandled = false;
+    bool _homeCycleIssued = false;
+    bool _originConfigured = false;
 
     void enterSetOrigin();
     void confirmSetOrigin(UiState returnState);

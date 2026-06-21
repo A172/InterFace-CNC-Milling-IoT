@@ -8,7 +8,7 @@ namespace AppConfig {
   constexpr const char *FIRMWARE_DESCRIPTION = "ESP32-S3 CNC Interface";
   constexpr const char *FIRMWARE_AUTHOR = "Alfath Yusuf Biyono";
   constexpr const char *FIRMWARE_AUTHOR_ID = "2141170132";
-  constexpr const char *FIRMWARE_LAST_UPDATED = "20/06/2026";
+  constexpr const char *FIRMWARE_LAST_UPDATED = "21/06/2026";
 
   // Fokus pengembangan saat ini: validasi tampilan dan navigasi.
   // Saat aktif, perintah G-code tidak dikirim ke controller CNC.
@@ -77,10 +77,19 @@ namespace AppConfig {
   constexpr unsigned long MACHINE_STATUS_POLL_MS = 1000;
 
   // ========== JOB CONTROL ==========
+  // Tetap membutuhkan CNC_ENABLE_MARLIN_CONNECTION dan preflight yang valid.
+  constexpr bool ENABLE_JOB_CONTROL = true;
   // Safety move saat mengulang job: Z naik dulu, baru X/Y kembali ke origin kerja.
   constexpr bool ENABLE_JOB_REPEAT_RETURN = true;
   constexpr float JOB_REPEAT_SAFE_Z_MM = 10.0f;
   constexpr unsigned int JOB_TRAVEL_FEED_MM_MIN = 600;
+  constexpr uint8_t JOB_ANALYSIS_LINES_PER_LOOP = 12;
+  constexpr size_t JOB_MAX_LINE_LENGTH = 192;
+  constexpr unsigned long JOB_START_DRAIN_MS = 500;
+  constexpr unsigned long JOB_COMMAND_TIMEOUT_MS = 120000;
+  constexpr unsigned long JOB_UI_REFRESH_MS = 500;
+  constexpr unsigned long JOB_START_HOLD_MS = 1000;
+  constexpr unsigned long JOB_STOP_HOLD_MS = 1500;
   
   // ========== UI/UX ==========
   constexpr unsigned long BUTTON_DEBOUNCE_MS = 20;     // Debounce button

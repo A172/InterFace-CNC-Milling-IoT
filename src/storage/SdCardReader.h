@@ -82,6 +82,9 @@ class SdCardReader {
     // Menampilkan file job yang sedang dipilih ke Serial Monitor.
     void printSelectedJobFile() const;
 
+    // Membuka file untuk parser/job sender tanpa mengekspos konfigurasi SPI.
+    File openFileForRead(const char *path) const;
+
   // Ambil preview (beberapa baris pertama) dari sebuah file untuk ditampilkan di UI
   // Mengembalikan vector<String> berisi baris (atau potongan) file, maksimal maxLines
   std::vector<String> previewFileLines(const char *path, size_t maxLines = 5, size_t charsPerLine = 20);

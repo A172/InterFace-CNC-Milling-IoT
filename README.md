@@ -76,6 +76,8 @@ ESP32-S3 CNC Interface
 - Sinkronisasi waktu NTP WIB dan penggunaan waktu internal ESP32 setelah sinkron.
 - MQTT monitoring lokal ke Mosquitto.
 - Monitoring state mesin melalui topic retained `cnc/machine`.
+- G-code sender file SD non-blocking dengan flow control respons `ok` Marlin.
+- Estimasi waktu tersisa dari analisis gerakan G-code.
 - Layar About tiga halaman dengan logo dan identitas pengembang.
 - Feedback buzzer non-blocking untuk navigasi, job selesai, warning, dan alarm Marlin.
 
@@ -117,7 +119,7 @@ Format indikator koneksi:
 - `WiFi:[OK]` berarti WiFi terhubung dan `WiFi:[X]` berarti tidak terhubung/nonaktif.
 - `MQTT:[OK]` berarti MQTT terhubung ke broker dan `MQTT:[X]` berarti tidak terhubung/nonaktif.
 
-Indikator tampil pada satu baris khusus di bawah koordinat dengan format `WiFi:[...] MQTT:[...]`. Font tetap `6x10`, sama seperti koordinat, dan indikator tetap terlihat saat progress job tampil.
+Indikator tampil pada satu baris khusus di bawah koordinat dengan format `WiFi:[...] MQTT:[...]`. Font tetap `6x10`, sama seperti koordinat, dan indikator tetap terlihat saat progress job tampil. Saat file job sudah dipilih, garis horizontal memisahkan baris koneksi dari nama job dan estimasi agar informasi lebih mudah dibaca.
 
 Nilai koordinat X/Y/Z hanya dianggap valid setelah respons `M114` diterima saat CNC berstatus `CONNECTED`. Jika mesin belum tersambung, standby menampilkan `?` untuk setiap koordinat.
 
@@ -180,6 +182,26 @@ Menu Select Job langsung membuka browser SD card. Fitur yang tersedia:
 - Back kembali ke folder induk, lalu kembali ke menu utama dari root SD card.
 
 Job aktif ditampilkan kembali di standby screen sebagai `Job: nama_file`.
+
+Setelah file dipilih, firmware menganalisis G-code secara bertahap agar tombol, LCD, MQTT, dan UART tetap responsif. Workflow menjalankan job:
+
+1. Pilih file melalui `Select Job`.
+2. Tunggu status job `READY` dan estimasi selesai dihitung.
+3. Jalankan `Home All`.
+4. Atur dan simpan `Set Origin` sehingga soft endstop aktif.
+5. Tahan tombol `X+ / PLAY` selama 1 detik, lalu konfirmasi Start.
+
+Kontrol job saat berjalan:
+
+- `X+ / PLAY`: tahan untuk Start saat `READY`; tekan singkat untuk Resume saat `PAUSED`.
+- `X- / PAUSE`: meminta pause setelah command aktif mendapat respons `ok`.
+- `Z- / STOP`: tahan 1,5 detik untuk controlled stop dan mengirim `M5`.
+
+Stop tersebut bukan emergency stop. Emergency stop harus tetap menggunakan rangkaian/tombol hardware khusus.
+
+State job yang tersedia adalah `IDLE`, `ANALYZING`, `READY`, `STARTING`, `RUNNING`, `PAUSING`, `PAUSED`, `STOPPING`, `COMPLETING`, `COMPLETED`, `STOPPED`, dan `ERROR`.
+
+Estimasi LCD adalah waktu tersisa dengan format `HH:MM:SS`. Perhitungan membaca jarak dan feedrate `G0/G1`, arc XY `G2/G3`, dwell `G4`, unit `G20/G21`, mode `G90/G91`, dan perubahan koordinat `G92`. Estimasi belum memasukkan akselerasi, deselerasi, pergantian tool, waktu spindle mencapai RPM, atau perilaku khusus macro sehingga harus dianggap perkiraan.
 
 ### Machine Ctrl&Status
 
@@ -258,7 +280,7 @@ Topic utama yang digunakan:
 - `cnc/status` - publish status koneksi ESP32 ke broker.
 - `cnc/command` - subscribe command sederhana dan tampilkan payload di Serial Monitor.
 - `cnc/gcode` - subscribe baris G-code dan tampilkan payload di Serial Monitor.
-- `cnc/progress` - publish progress job; bernilai `null` dan `idle` jika job belum berjalan.
+- `cnc/progress` - publish nama file, progress byte yang sudah diakui Marlin, dan state job.
 - `cnc/error` - publish status error aktif.
 - `cnc/position` - publish posisi X/Y/Z dari Marlin.
 - `cnc/machine` - publish state CNC, spindle, soft endstop, feedrate, dan sensor home.
@@ -314,15 +336,40 @@ Contoh `cnc/machine` ketika komunikasi CNC dinonaktifkan:
 {
   "state": "OFF",
   "connected": false,
-  "spindle": "?",
-  "soft_endstop": "?",
+  "activity": "IDLE",
+  "spindle": "UNKNOWN",
+  "soft_endstop": "UNKNOWN",
   "feed_xy": null,
   "feed_z": null,
-  "x_home": "?",
-  "y_home": "?",
-  "z_home": "?"
+  "x_home": "UNKNOWN",
+  "y_home": "UNKNOWN",
+  "z_home": "UNKNOWN"
 }
 ```
+
+Contoh `cnc/progress` saat file selesai dianalisis dan siap dijalankan:
+
+```json
+{
+  "file": "contoh.nc",
+  "progress": 0,
+  "state": "READY"
+}
+```
+
+Jika belum ada file yang dipilih, field `file` berisi `Tidak tersedia`, progress `0`, dan state `IDLE`. Pemilihan file tidak otomatis menjalankan mesin. Saat sender aktif, progress hanya bertambah setelah Marlin mengirim `ok` untuk command yang dikirim.
+
+### Pemetaan Node-RED Dashboard 2.0
+
+- Status Sistem: `cnc/status.connected`, `cnc/status.state`, `cnc/machine.connected`, `cnc/machine.state`, dan `cnc/machine.activity`.
+- Posisi Mesin: `cnc/position.x/y/z` serta `cnc/machine.x_home/y_home/z_home`.
+- Status Pekerjaan: `cnc/progress.file`, `cnc/progress.progress`, dan `cnc/progress.state`.
+- Status Spindle: `cnc/machine.spindle`.
+- Parameter Gerak: `cnc/machine.feed_xy`, `cnc/machine.feed_z`, dan `cnc/machine.soft_endstop`.
+- Informasi Jaringan: `cnc/network.ssid/ip/mqtt` serta `cnc/time.time/date/sync`.
+- Status Alarm: `cnc/alarm.level/message` serta `cnc/error.active/message`.
+
+Seluruh payload monitoring di atas dipublish retained agar dashboard memperoleh nilai terakhir setelah reconnect. Topic `cnc/command` dan `cnc/gcode` tetap receive-only dan tidak dieksekusi.
 
 Jalur simulasi posisi MQTT sudah disiapkan melalui `MqttConfig::ENABLE_POSITION_SIMULATION`, tetapi default tetap `false` agar dashboard tidak menerima data palsu. Aktifkan hanya untuk pengujian terkontrol tanpa Marlin.
 
@@ -348,6 +395,8 @@ Status integrasi saat ini:
 - Respons Marlin dengan format posisi `X:... Y:... Z:...` diparse ke `_posX`, `_posY`, dan `_posZ`.
 - Nilai posisi tersebut dipakai oleh tampilan standby, Set Origin, dan MQTT `cnc/position`.
 - Perintah gerak, spindle, feedrate, dan Set Origin hanya dikirim saat status Marlin `CONNECTED`.
+- Job sender membaca file SD satu baris per transaksi dan menunggu respons `ok` sebelum mengirim baris berikutnya.
+- Polling status reguler dihentikan sementara saat sender memiliki UART; ketika `PAUSED`, sender mengirim heartbeat `M114` sendiri.
 
 Status ringkas pada standby:
 
@@ -394,7 +443,10 @@ Perintah build:
 
 ## Batasan Saat Ini
 
-- Job controller / G-code sender penuh belum selesai.
+- Job controller file SD sudah tersedia tetapi belum divalidasi pada mesin CNC nyata.
+- Pause/Stop bersifat controlled dan memakai `M400` untuk menunggu planner kosong; bukan emergency stop.
+- Estimasi waktu belum memperhitungkan akselerasi, pergantian tool, dan waktu proses non-gerak lainnya.
+- Interlock Home/Origin saat ini mencatat command yang dikirim interface; validasi independen bahwa homing benar-benar berhasil masih perlu ditambahkan dari status Marlin.
 - MQTT command sudah dapat diterima dan dicatat di Serial, tetapi belum dieksekusi.
 - Baris G-code MQTT sudah dapat diterima dan dicatat di Serial, tetapi belum dikirim ke Marlin atau disimpan ke SD card.
 - Upload file G-code lengkap via MQTT belum tersedia.

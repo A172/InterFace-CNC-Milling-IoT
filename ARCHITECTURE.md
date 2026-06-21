@@ -69,6 +69,8 @@ src/
   input/
     ButtonHandler.h/.cpp     -> pembacaan push button
     EncoderHandler.h/.cpp    -> pembacaan rotary encoder
+  job/
+    GcodeJobController.h/.cpp -> analisis, estimasi, state, dan streaming G-code
   network/
     WifiPortal.h/.cpp        -> WiFiManager dan parameter MQTT
     CloudMqtt.h/.cpp         -> MQTT monitoring lokal
@@ -102,6 +104,8 @@ AppController::update()
    +-- updateAboutScreen()
    +-- BuzzerHandler::update()
    +-- updateMarlinCommunication()
+   +-- GcodeJobController::updateAnalysis()
+   +-- GcodeJobController::update()
    +-- updateNetwork()
    +-- updateStorageFileDisplay()
 ```
@@ -119,6 +123,22 @@ Fungsi utama:
 - Menggunakan posisi Marlin untuk standby screen, Set Origin, dan MQTT `cnc/position`.
 - Menandai posisi tidak valid sampai respons `M114` diterima dan menampilkan `?` pada LCD/MQTT.
 - Mengirim alarm MQTT jika koneksi yang sebelumnya aktif menjadi `LOST` atau Marlin mengirim `ERROR`.
+- Menyerahkan UART kepada job sender selama state aktif agar respons `ok` tidak tercampur polling reguler.
+
+## Job Control
+
+`GcodeJobController` membuka file melalui `SdCardReader`, menganalisis sejumlah baris per loop, lalu membuka ulang file saat Start. Sender hanya memiliki satu command yang menunggu respons pada satu waktu.
+
+Alur state:
+
+```text
+IDLE -> ANALYZING -> READY -> STARTING -> RUNNING -> COMPLETING -> COMPLETED
+                                      +-> PAUSING -> PAUSED -> RUNNING
+                                      +-> STOPPING -> STOPPED
+                                      +-> ERROR
+```
+
+Progress dihitung dari posisi byte file yang sudah mendapat `ok`. Estimasi dihitung dari gerakan G0/G1, arc G2/G3 bidang XY, dan dwell G4. Controlled Stop menunggu command aktif selesai lalu mengirim `M5`; fungsi ini bukan emergency stop.
 
 ## MQTT Lokal
 
@@ -142,6 +162,19 @@ Topic monitoring kompatibilitas:
 - `cnc/alarm`
 
 Payload command dan G-code hanya dicetak ke Serial Monitor. Eksekusi ke UART Marlin dan upload file belum diaktifkan.
+
+Kontrak data dashboard:
+
+- `cnc/status`: status online/offline interface ESP32-S3.
+- `cnc/network`: SSID, alamat IP, dan status link MQTT.
+- `cnc/position`: posisi X/Y/Z, tampilan string, unit, validitas, dan sumber data.
+- `cnc/progress`: nama file terpilih, persentase progress, dan state proses.
+- `cnc/machine`: koneksi/state Marlin, activity job, spindle, soft endstop, feedrate XY/Z, dan home X/Y/Z.
+- `cnc/time`: status sinkronisasi, waktu, dan tanggal.
+- `cnc/alarm`: level dan pesan alarm Marlin.
+- `cnc/error`: flag error aktif dan pesan error.
+
+`AppController` membentuk `MqttMonitoringSnapshot` dari state runtime yang sudah tersedia. `CloudMqtt` hanya mengubah snapshot tersebut menjadi JSON dan mengatur interval/retained publish. Jika Marlin belum menyediakan data, payload memakai `UNKNOWN` atau `null`; data dummy posisi tetap dinonaktifkan secara default.
 
 ## UI Workflow
 

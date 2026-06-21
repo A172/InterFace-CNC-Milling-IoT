@@ -40,6 +40,10 @@ namespace {
     return String(value, 2);
   }
 
+  String statusOrUnknown(const String &value) {
+    return value.length() == 0 || value == "?" ? String("UNKNOWN") : value;
+  }
+
   void mqttCallback(char *topic, byte *payload, unsigned int length) {
     if (activeMqtt != nullptr) {
       activeMqtt->handleMessage(topic, payload, length);
@@ -342,16 +346,19 @@ void CloudMqtt::publishPosition(const MqttMonitoringSnapshot &snapshot, unsigned
 void CloudMqtt::publishMachine(const MqttMonitoringSnapshot &snapshot, unsigned long now) {
   bool connected = snapshot.marlinStatus == "CONNECTED";
   bool feedrateValid = connected && snapshot.feedrateValid;
-  String spindle = connected ? (snapshot.spindleOn ? "ON" : "OFF") : "?";
-  String softEndstop = connected ? snapshot.softEndstop : String("?");
-  String homeX = connected ? snapshot.homeX : String("?");
-  String homeY = connected ? snapshot.homeY : String("?");
-  String homeZ = connected ? snapshot.homeZ : String("?");
+  String spindle = connected ? (snapshot.spindleOn ? "ON" : "OFF") : "UNKNOWN";
+  String softEndstop = connected
+    ? statusOrUnknown(snapshot.softEndstop)
+    : String("UNKNOWN");
+  String homeX = connected ? statusOrUnknown(snapshot.homeX) : String("UNKNOWN");
+  String homeY = connected ? statusOrUnknown(snapshot.homeY) : String("UNKNOWN");
+  String homeZ = connected ? statusOrUnknown(snapshot.homeZ) : String("UNKNOWN");
   String feedXY = feedrateValid ? String(snapshot.feedrateXY) : String("null");
   String feedZ = feedrateValid ? String(snapshot.feedrateZ) : String("null");
   String payload = String("{\"state\":\"") + escapeJson(snapshot.marlinStatus) +
                    "\",\"connected\":" + (connected ? "true" : "false") +
-                   ",\"spindle\":\"" + escapeJson(spindle) +
+                   ",\"activity\":\"" + escapeJson(snapshot.jobState) +
+                   "\",\"spindle\":\"" + escapeJson(spindle) +
                    "\",\"soft_endstop\":\"" + escapeJson(softEndstop) +
                    "\",\"feed_xy\":" + feedXY +
                    ",\"feed_z\":" + feedZ +
@@ -370,14 +377,19 @@ void CloudMqtt::publishMachine(const MqttMonitoringSnapshot &snapshot, unsigned 
 }
 
 void CloudMqtt::publishProgress(const MqttMonitoringSnapshot &snapshot, unsigned long now) {
-  String payload;
-  if (snapshot.progress < 0) {
-    payload = "{\"progress\":null,\"state\":\"idle\"}";
-  } else {
-    int progress = constrain(snapshot.progress, 0, 100);
-    payload = String("{\"progress\":") + String(progress) +
-              ",\"state\":\"running\"}";
-  }
+  String fileName = snapshot.jobFile.length() > 0
+    ? snapshot.jobFile
+    : String("Tidak tersedia");
+  int progress = snapshot.progress < 0
+    ? 0
+    : constrain(snapshot.progress, 0, 100);
+  String state = snapshot.jobState.length() > 0
+    ? snapshot.jobState
+    : String("IDLE");
+
+  String payload = String("{\"file\":\"") + escapeJson(fileName) +
+                   "\",\"progress\":" + String(progress) +
+                   ",\"state\":\"" + escapeJson(state) + "\"}";
 
   if (payload == _lastProgressPayload &&
       now - _lastProgressPublish < MqttConfig::PROGRESS_INTERVAL_MS) {
@@ -415,12 +427,11 @@ void CloudMqtt::publishAlarm(const MqttMonitoringSnapshot &snapshot) {
   } else if (snapshot.marlinStatus == "ERROR") {
     level = "ERROR";
     message = "Marlin error";
-  } else if (snapshot.marlinStatus == "DISCONNECTED") {
-    message = "Marlin not connected";
-  } else if (snapshot.marlinStatus == "WAITING") {
-    message = "Waiting for Marlin";
-  } else if (snapshot.marlinStatus == "OFF") {
-    message = "Marlin connection disabled";
+  } else if (snapshot.jobState == "ERROR") {
+    level = "ERROR";
+    message = snapshot.jobError.length() > 0
+      ? snapshot.jobError
+      : String("G-code job error");
   }
 
   String payload = String("{\"level\":\"") + level +
@@ -438,13 +449,16 @@ void CloudMqtt::publishAlarm(const MqttMonitoringSnapshot &snapshot) {
 void CloudMqtt::publishError(const MqttMonitoringSnapshot &snapshot) {
   bool connectionLost = snapshot.marlinStatus == "LOST";
   bool marlinError = snapshot.marlinStatus == "ERROR";
-  bool active = connectionLost || marlinError;
-  const char *message = connectionLost
-    ? "Marlin connection lost"
-    : (marlinError ? "Marlin error" : "");
+  bool jobError = snapshot.jobState == "ERROR";
+  bool active = connectionLost || marlinError || jobError;
+  String message = connectionLost
+    ? String("Marlin connection lost")
+    : (marlinError
+        ? String("Marlin error")
+        : (jobError ? snapshot.jobError : String()));
   String payload = String("{\"active\":") + (active ? "true" : "false") +
                    ",\"message\":\"" +
-                   message + "\"}";
+                   escapeJson(message) + "\"}";
 
   if (payload == _lastErrorPayload) {
     return;

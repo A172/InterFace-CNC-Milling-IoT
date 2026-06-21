@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-06-21
+
+- Menambahkan `GcodeJobController` untuk analisis file SD, flow control `ok`, progress, timeout, dan state job.
+- Menambahkan estimasi waktu tersisa dari G0/G1/G2/G3/G4 dengan dukungan unit serta mode posisi modal.
+- Mengaktifkan `X+/PLAY` untuk Start/Resume, `X-/PAUSE` untuk Pause, dan long-press `Z-/STOP` untuk controlled stop.
+- Menambahkan preflight file, koneksi Marlin, Home All, Set Origin, dan soft endstop sebelum Start.
+- Menambahkan field kompatibel `activity` pada `cnc/machine` dan state aktual pada `cnc/progress`.
+- Menambahkan alarm/error MQTT ketika job sender masuk state `ERROR`.
+- Menambahkan heartbeat `M114` saat pause dan memblokir polling lain ketika job menguasai UART.
+- Memperbarui tanggal firmware terakhir menjadi `21/06/2026`.
+- Menambahkan garis pemisah antara status WiFi/MQTT dan informasi job pada standby ketika file dipilih.
+- Merapikan posisi vertikal elemen standby agar garis, nama job, dan estimasi tetap muat pada LCD 128x64.
+- Mengaudit seluruh topic MQTT dan mempertahankan `cnc/status`, `cnc/network`, `cnc/position`, `cnc/progress`, `cnc/time`, `cnc/alarm`, `cnc/error`, `cnc/command`, `cnc/gcode`, dan `cnc/machine`.
+- Menambahkan field `file` pada payload retained `cnc/progress` dari file SD card yang benar-benar dipilih.
+- Menggunakan fallback progress aman `Tidak tersedia`, `0`, dan `IDLE` saat job belum tersedia atau belum berjalan.
+- Mengubah placeholder detail mesin yang belum tersedia dari `?` menjadi `UNKNOWN` tanpa mengubah nama field `cnc/machine`.
+- Menormalkan kondisi alarm tanpa error menjadi `{"level":"INFO","message":"OK"}`.
+- Mendokumentasikan pemetaan topic dan field untuk Node-RED Dashboard 2.0.
+
 ## 2026-06-20
 
 - Mengganti scrolling piksel About menjadi tiga halaman yang berganti setiap 3 detik agar mudah dibaca.

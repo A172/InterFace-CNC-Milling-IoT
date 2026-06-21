@@ -460,6 +460,13 @@ void SdCardReader::printSelectedJobFile() const {
   Serial.println(_selectedJobFile);
 }
 
+File SdCardReader::openFileForRead(const char *path) const {
+  if (!_ready || path == nullptr || path[0] == '\0') {
+    return File();
+  }
+  return SD.open(path, FILE_READ);
+}
+
 std::vector<String> SdCardReader::previewFileLines(const char *path, size_t maxLines, size_t charsPerLine) {
   std::vector<String> result;
 

@@ -220,53 +220,54 @@ void LcdHandler::showStandbyLines(const char *top, const char *middle, const cha
   _lcd->setFont(u8g2_font_6x10_tf);
 
   // Baris 1: Status & Jam
-  _lcd->drawStr(0, 10, fitText(top, 15).c_str());
+  _lcd->drawStr(0, 9, fitText(top, 15).c_str());
   if (timeStr != nullptr) {
     int16_t timeX = 128 - (_lcd->getStrWidth(timeStr));
-    _lcd->drawStr(timeX, 10, timeStr);
+    _lcd->drawStr(timeX, 9, timeStr);
   }
-  _lcd->drawHLine(0, 12, 128);
+  _lcd->drawHLine(0, 11, 128);
 
   // Baris 2: Koordinat X & Y
-  _lcd->drawStr(0, 24, middle);
+  _lcd->drawStr(0, 22, middle);
 
   // Baris 3: Koordinat Z & Progress Bar
-  _lcd->drawStr(0, 35, bottom);
+  _lcd->drawStr(0, 32, bottom);
 
   if (progress >= 0) {
     // Gambar Bar Progres di sisi kanan koordinat Z
     uint8_t pct = (progress > 100) ? 100 : (progress < 0 ? 0 : progress);
-    _lcd->drawFrame(65, 29, 35, 6);             // Bingkai bar (lebar 35px agar muat)
-    _lcd->drawBox(67, 31, (pct * 31) / 100, 2); // Isi bar
+    _lcd->drawFrame(65, 26, 35, 6);             // Bingkai bar (lebar 35px agar muat)
+    _lcd->drawBox(67, 28, (pct * 31) / 100, 2); // Isi bar
 
     // Teks Persenan di pojok kanan
     char pStr[8];
     snprintf(pStr, sizeof(pStr), "%d%%", pct);
-    _lcd->drawStr(104, 35, pStr);
+    _lcd->drawStr(104, 32, pStr);
   }
 
   // Baris jaringan memakai lebar penuh agar label lengkap tetap memakai font 6x10.
   if (networkStatus != nullptr && strlen(networkStatus) > 0) {
-    _lcd->drawStr(centerX(_lcd, networkStatus), 46, networkStatus);
+    _lcd->drawStr(centerX(_lcd, networkStatus), 42, networkStatus);
   }
 
   // Baris 5-6: Status job dan estimasi waktu kerja.
   if (jobName != nullptr && strlen(jobName) > 0) {
-    _lcd->drawStr(0, 55, fitText(jobName, LCD_MAX_CHARS).c_str());
+    _lcd->drawHLine(0, 45, 128);
+    _lcd->drawStr(0, 54, fitText(jobName, LCD_MAX_CHARS).c_str());
 
     if (eta != nullptr && strlen(eta) > 0) {
       String estimateLine = "Estimasi: ";
       estimateLine += eta;
-      _lcd->drawStr(0, 64, fitText(estimateLine, LCD_MAX_CHARS).c_str());
+      _lcd->drawStr(0, 63, fitText(estimateLine, LCD_MAX_CHARS).c_str());
     }
   } else if (eta != nullptr && strlen(eta) > 0) {
     String estimateLine = "Estimasi: ";
     estimateLine += eta;
-    _lcd->drawStr(0, 64, fitText(estimateLine, LCD_MAX_CHARS).c_str());
+    _lcd->drawStr(0, 63, fitText(estimateLine, LCD_MAX_CHARS).c_str());
   } else {
     // Posisi Zzz tetap sesuai perbaikan manual Anda
     _lcd->setFont(u8g2_font_ncenB14_tr);
-    _lcd->drawStr(50, 64, "Zzz");
+    _lcd->drawStr(50, 63, "Zzz");
     _lcd->setFont(u8g2_font_6x10_tf);
   }
 

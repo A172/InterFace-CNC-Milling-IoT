@@ -39,6 +39,22 @@ namespace {
     return normalized;
   }
 
+  String formatDurationHms(uint32_t totalSeconds) {
+    uint32_t hours = totalSeconds / 3600UL;
+    uint8_t minutes = (totalSeconds % 3600UL) / 60UL;
+    uint8_t seconds = totalSeconds % 60UL;
+    char text[16];
+    snprintf(
+      text,
+      sizeof(text),
+      "%02lu:%02u:%02u",
+      static_cast<unsigned long>(hours),
+      minutes,
+      seconds
+    );
+    return String(text);
+  }
+
   String normalizeSdDirectory(const String &path) {
     String normalized = path.length() ? path : "/";
     normalized.replace("//", "/");
@@ -484,11 +500,11 @@ bool AppController::canSendMarlinCommand() const {
 }
 
 void AppController::showCncUnavailable(UiState returnState) {
-  const char *message = "Belum terhubung";
+  const char *message = "Marlin belum terhubung";
   switch (marlinConnectionState()) {
     case MarlinConnectionState::Off: message = "Koneksi CNC OFF"; break;
     case MarlinConnectionState::Waiting: message = "Menunggu Marlin"; break;
-    case MarlinConnectionState::Disconnected: message = "Belum terhubung"; break;
+    case MarlinConnectionState::Disconnected: message = "Marlin belum terhubung"; break;
     case MarlinConnectionState::Lost: message = "Koneksi terputus"; break;
     case MarlinConnectionState::Error: message = "Marlin error"; break;
     case MarlinConnectionState::Connected: return;
@@ -980,13 +996,13 @@ void AppController::handleNetworkStatusSelect() {
   }
 
   if (_networkStatusSelected == NETWORK_ITEM_SSID) {
-    String ssid = _wifi.isConnected() ? _wifi.ssid() : "Belum terhubung";
+    String ssid = _wifi.isConnected() ? _wifi.ssid() : "Wifi belum terhubung";
     showInfoScreen("SSID", ssid.c_str(), UiState::NetworkStatus, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
     return;
   }
 
   if (_networkStatusSelected == NETWORK_ITEM_IP) {
-    String ip = _wifi.isConnected() ? _wifi.ipAddress() : "Belum terhubung";
+    String ip = _wifi.isConnected() ? _wifi.ipAddress() : "Wifi belum terhubung";
     showInfoScreen("IP ADDRESS", ip.c_str(), UiState::NetworkStatus, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
     return;
   }
@@ -1115,6 +1131,12 @@ void AppController::publishMqttMonitoring() {
   snapshot.positionSource = marlinPositionValid
     ? "marlin"
     : (MqttConfig::ENABLE_POSITION_SIMULATION ? "simulation" : "unavailable");
+  snapshot.jobFile = computeJobName();
+  if (snapshot.jobFile.length() == 0) {
+    snapshot.jobFile = "Tidak tersedia";
+  }
+  snapshot.jobState = _job.stateText();
+  snapshot.jobError = _job.errorMessage();
   snapshot.progress = computeProgress();
   snapshot.sdReady = _sdCard.isReady();
 
@@ -1122,6 +1144,11 @@ void AppController::publishMqttMonitoring() {
 }
 
 bool AppController::toggleSpindle() {
+  if (_job.isActive()) {
+    showJobControlMessage("Job sedang aktif");
+    return false;
+  }
+
   if (!canSendMarlinCommand()) {
     showCncUnavailable(UiState::MachineStatus);
     return false;
@@ -1145,6 +1172,11 @@ bool AppController::toggleSpindle() {
 }
 
 bool AppController::applyMachineFeedrate() {
+  if (_job.isActive()) {
+    showJobControlMessage("Job sedang aktif");
+    return false;
+  }
+
   if (!canSendMarlinCommand()) {
     showCncUnavailable(UiState::MachineStatus);
     return false;
@@ -1171,7 +1203,7 @@ bool AppController::applyMachineFeedrate() {
 }
 
 void AppController::requestMachineFeedrateStatus(bool force) {
-  if (!canSendMarlinCommand()) {
+  if (!canSendMarlinCommand() || _job.ownsMarlinStream()) {
     return;
   }
 
@@ -1208,7 +1240,7 @@ void AppController::parseMachineFeedrateStatus(const String &line) {
 }
 
 void AppController::requestMachineGeometryStatus(bool force) {
-  if (!canSendMarlinCommand()) {
+  if (!canSendMarlinCommand() || _job.ownsMarlinStream()) {
     return;
   }
 
@@ -1253,7 +1285,7 @@ void AppController::parseMachineGeometryStatus(const String &line) {
 }
 
 void AppController::requestHomeSensorStatus(bool force) {
-  if (!canSendMarlinCommand()) {
+  if (!canSendMarlinCommand() || _job.ownsMarlinStream()) {
     return;
   }
 
@@ -1295,7 +1327,7 @@ void AppController::parseHomeSensorStatus(const String &line) {
 }
 
 void AppController::requestSoftEndstopStatus(bool force) {
-  if (!canSendMarlinCommand()) {
+  if (!canSendMarlinCommand() || _job.ownsMarlinStream()) {
     return;
   }
 
@@ -1550,6 +1582,8 @@ void AppController::executeConfirmedAction() {
 
     if (AppConfig::ENABLE_HOME_CONTROL) {
       Serial1.println("G28");
+      _homeCycleIssued = true;
+      _originConfigured = false;
       showInfoScreen(
         "HOME ALL",
         "G28 dikirim",
@@ -1574,6 +1608,11 @@ void AppController::executeConfirmedAction() {
 
   if (action == PendingAction::RepeatJob) {
     repeatSelectedJob(UiState::Standby);
+    return;
+  }
+
+  if (action == PendingAction::StartJob) {
+    startSelectedJob(false, UiState::Standby);
     return;
   }
 
@@ -1654,39 +1693,67 @@ void AppController::executeConfirmedAction() {
 }
 
 void AppController::repeatSelectedJob(UiState returnState) {
+  startSelectedJob(AppConfig::ENABLE_JOB_REPEAT_RETURN, returnState);
+}
+
+bool AppController::startSelectedJob(bool returnToOrigin, UiState returnState) {
+  if (!AppConfig::ENABLE_JOB_CONTROL) {
+    showInfoScreen("START JOB", "Job control OFF", returnState, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return false;
+  }
+
   if (_selectedJobSource != JobSource::SdCard || !_sdCard.hasSelectedJobFile()) {
-    showInfoScreen(
-      "REPEAT JOB",
-      "Tidak ada file",
-      returnState,
-      AppConfig::CONFIRM_RESULT_MESSAGE_MS
-    );
-    return;
+    showInfoScreen("START JOB", "Pilih file dulu", returnState, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return false;
+  }
+
+  if (_job.state() == GcodeJobController::State::Analyzing) {
+    showInfoScreen("START JOB", "Analisis belum selesai", returnState, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return false;
+  }
+
+  if (_job.state() == GcodeJobController::State::Error) {
+    showInfoScreen("START JOB", _job.errorMessage().c_str(), returnState, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return false;
   }
 
   if (!canSendMarlinCommand()) {
     showCncUnavailable(returnState);
-    return;
+    return false;
   }
 
-  if (AppConfig::ENABLE_JOB_REPEAT_RETURN) {
-    Serial1.println("M400");
-    Serial1.println("G90");
-    Serial1.print("G0 Z");
-    Serial1.print(AppConfig::JOB_REPEAT_SAFE_Z_MM, 2);
-    Serial1.print(" F");
-    Serial1.println(AppConfig::JOB_TRAVEL_FEED_MM_MIN);
-    Serial1.print("G0 X0 Y0 F");
-    Serial1.println(AppConfig::JOB_TRAVEL_FEED_MM_MIN);
+  if (!_homeCycleIssued) {
+    showInfoScreen("START JOB", "Home All dulu", returnState, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return false;
   }
 
-  // Tahap berikutnya: panggil G-code sender untuk streaming file yang sama dari awal.
+  if (!_originConfigured) {
+    showInfoScreen("START JOB", "Set Origin dulu", returnState, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return false;
+  }
+
+  if (!_softEndstopLoaded || !_softEndstopEnabled) {
+    showInfoScreen("START JOB", "SoftEnd harus ON", returnState, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return false;
+  }
+
+  if (!_sdCard.fileExists(_sdCard.selectedJobFile().c_str())) {
+    showInfoScreen("START JOB", "File SD hilang", returnState, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return false;
+  }
+
+  if (!_job.start(returnToOrigin)) {
+    showInfoScreen("START JOB", "Start ditolak", returnState, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return false;
+  }
+
   showInfoScreen(
-    "REPEAT JOB",
-    AppConfig::ENABLE_JOB_REPEAT_RETURN ? "Kembali ke origin" : "Repeat disiapkan",
-    returnState,
+    returnToOrigin ? "REPEAT JOB" : "START JOB",
+    returnToOrigin ? "Kembali lalu mulai" : "Job mulai",
+    UiState::Standby,
     AppConfig::CONFIRM_RESULT_MESSAGE_MS
   );
+  return true;
 }
 
 bool AppController::isConfirmationState() const {
@@ -1785,16 +1852,25 @@ String AppController::computeJobName() const {
 }
 
 String AppController::computeEta() const {
-  // Placeholder: Nantinya dihitung berdasarkan sisa baris G-code / kecepatan
-  if (_selectedJobSource == JobSource::SdCard && _sdCard.hasSelectedJobFile()) {
-    return String("00:00:00");
+  if (_selectedJobSource != JobSource::SdCard || !_sdCard.hasSelectedJobFile()) {
+    return String();
   }
-  return String();
+
+  if (!_job.estimateReady()) {
+    return String("--:--:--");
+  }
+
+  uint32_t seconds = _job.state() == GcodeJobController::State::Ready
+    ? _job.totalEstimateSeconds()
+    : _job.remainingEstimateSeconds();
+  return formatDurationHms(seconds);
 }
 
 int AppController::computeProgress() const {
-  // Pemilihan file belum berarti job sedang berjalan.
-  return -1;
+  if (_selectedJobSource != JobSource::SdCard || !_sdCard.hasSelectedJobFile()) {
+    return -1;
+  }
+  return _job.progressPercent();
 }
 
 String AppController::getLocalTimeString() const {
@@ -1808,6 +1884,11 @@ void AppController::update() {
     updateInput();
   }
 
+  updateStandbyJobButtons();
+  if (_storageStarted) {
+    _job.updateAnalysis(AppConfig::JOB_ANALYSIS_LINES_PER_LOOP);
+  }
+
   updateAboutScreen();
 
   if (_uiState == UiState::Info &&
@@ -1817,11 +1898,24 @@ void AppController::update() {
   }
 
   updateMarlinCommunication();
+  if (_marlinConnectionEnabled) {
+    _job.update(Serial1);
+  }
+  updateJobControl();
+
   MarlinConnectionState cncState = marlinConnectionState();
+  if (cncState == MarlinConnectionState::Off ||
+      cncState == MarlinConnectionState::Disconnected ||
+      cncState == MarlinConnectionState::Lost ||
+      cncState == MarlinConnectionState::Error) {
+    _homeCycleIssued = false;
+    _originConfigured = false;
+  }
   _buzzer.setAlarmActive(
     AppConfig::ENABLE_BUZZER_MARLIN_ALARM &&
     (cncState == MarlinConnectionState::Lost ||
-     cncState == MarlinConnectionState::Error)
+     cncState == MarlinConnectionState::Error ||
+     _job.state() == GcodeJobController::State::Error)
   );
 
   // Logika Long Press Jogging
@@ -1855,6 +1949,105 @@ void AppController::update() {
   }
 }
 
+void AppController::updateJobControl() {
+  if (_job.isActive()) {
+    _spindleOn = _job.spindleOn();
+  }
+
+  if (_job.consumeCompletedEvent()) {
+    _spindleOn = false;
+    notifyJobFinished();
+    return;
+  }
+
+  if (_job.consumeStoppedEvent()) {
+    _spindleOn = false;
+    _homeCycleIssued = false;
+    _originConfigured = false;
+    if (AppConfig::ENABLE_BUZZER_NOTIFICATION) {
+      _buzzer.play(BuzzerHandler::Cue::Warning);
+    }
+    showInfoScreen("JOB STOPPED", "Home & origin ulang", UiState::Standby, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return;
+  }
+
+  if (_job.consumeErrorEvent()) {
+    _spindleOn = false;
+    _homeCycleIssued = false;
+    _originConfigured = false;
+    if (_marlinConnectionEnabled) {
+      Serial1.println("M5");
+    }
+    if (AppConfig::ENABLE_BUZZER_NOTIFICATION) {
+      _buzzer.play(BuzzerHandler::Cue::Warning);
+    }
+    showInfoScreen("JOB ERROR", _job.errorMessage().c_str(), UiState::Standby, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+    return;
+  }
+
+  if (_uiState == UiState::Standby &&
+      _selectedJobSource == JobSource::SdCard &&
+      millis() - _lastJobScreenRefresh >= AppConfig::JOB_UI_REFRESH_MS) {
+    _lastJobScreenRefresh = millis();
+    showStandbyScreen();
+  }
+}
+
+void AppController::showJobControlMessage(const char *message) {
+  showInfoScreen("JOB CONTROL", message, UiState::Standby, AppConfig::CONFIRM_RESULT_MESSAGE_MS);
+}
+
+void AppController::updateStandbyJobButtons() {
+  if (_activeStandbyJobPin == 0) {
+    return;
+  }
+
+  if (digitalRead(_activeStandbyJobPin) == HIGH) {
+    if (_activeStandbyJobPin == PinConfig::BTN_X_PLUS &&
+        !_standbyJobLongPressHandled &&
+        _job.state() == GcodeJobController::State::Paused) {
+      if (_job.resume()) {
+        showJobControlMessage("RESUME");
+      }
+    }
+    _activeStandbyJobPin = 0;
+    return;
+  }
+
+  unsigned long heldMs = millis() - _standbyJobPressStartedAt;
+  if (_standbyJobLongPressHandled) {
+    return;
+  }
+
+  if (_activeStandbyJobPin == PinConfig::BTN_X_PLUS &&
+      heldMs >= AppConfig::JOB_START_HOLD_MS) {
+    _standbyJobLongPressHandled = true;
+    _activeStandbyJobPin = 0;
+    if (_job.state() == GcodeJobController::State::Ready) {
+      showActionConfirm(PendingAction::StartJob, "START JOB", "Jalankan file?");
+    } else if (_job.state() == GcodeJobController::State::Analyzing) {
+      showJobControlMessage("Sedang analisis");
+    } else if (_job.state() == GcodeJobController::State::Completed ||
+               _job.state() == GcodeJobController::State::Stopped) {
+      showActionConfirm(PendingAction::RepeatJob, "REPEAT JOB", "Ulangi file?");
+    } else if (_job.state() == GcodeJobController::State::Error) {
+      showJobControlMessage(_job.errorMessage().c_str());
+    } else {
+      showJobControlMessage("Job belum dipilih");
+    }
+    return;
+  }
+
+  if (_activeStandbyJobPin == PinConfig::BTN_Z_MINUS &&
+      heldMs >= AppConfig::JOB_STOP_HOLD_MS) {
+    _standbyJobLongPressHandled = true;
+    _activeStandbyJobPin = 0;
+    if (_job.requestStop()) {
+      showJobControlMessage("STOP diminta");
+    }
+  }
+}
+
 // --------------------
 // Komunikasi Marlin (Polling & Parsing)
 // --------------------
@@ -1877,6 +2070,11 @@ void AppController::updateMarlinCommunication() {
     if (line.length() > 0) {
       parseMarlinResponse(line);
     }
+  }
+
+  // Selama job aktif, hanya job sender yang boleh mengirim command baru.
+  if (_job.ownsMarlinStream()) {
+    return;
   }
 
   if (AppConfig::UI_DEVELOPMENT_MODE &&
@@ -1921,6 +2119,8 @@ void AppController::updateMarlinCommunication() {
 }
 
 void AppController::parseMarlinResponse(const String &line) {
+  _job.handleMarlinResponse(line);
+
   bool wasResponding = isMarlinResponding();
   _lastMarlinResponseMs = millis();
   _marlinEverResponded = true;
@@ -1986,6 +2186,31 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
     }
   }
 
+  // Tombol job tetap dapat dipakai saat layar informasi sementara tampil.
+  if (_job.isActive()) {
+    if (buttonNumber == PinConfig::BTN_X_MINUS) {
+      if (_job.requestPause()) {
+        showJobControlMessage("PAUSE diminta");
+      }
+      return;
+    }
+
+    if (buttonNumber == PinConfig::BTN_Z_MINUS) {
+      _activeStandbyJobPin = buttonNumber;
+      _standbyJobPressStartedAt = millis();
+      _standbyJobLongPressHandled = false;
+      return;
+    }
+
+    if (buttonNumber == PinConfig::BTN_X_PLUS &&
+        _job.state() == GcodeJobController::State::Paused) {
+      _activeStandbyJobPin = buttonNumber;
+      _standbyJobPressStartedAt = millis();
+      _standbyJobLongPressHandled = false;
+      return;
+    }
+  }
+
   if (_uiState == UiState::Info) {
     if (buttonNumber == (uint8_t)PinConfig::BTN7 ||
         buttonNumber == (uint8_t)PinConfig::BTN8) {
@@ -1999,6 +2224,13 @@ void AppController::onButtonPressed(uint8_t buttonNumber) {
         buttonNumber == (uint8_t)PinConfig::BTN_BACK) {
       exitAboutScreen();
     }
+    return;
+  }
+
+  if (_uiState == UiState::Standby && buttonNumber == PinConfig::BTN_X_PLUS) {
+    _activeStandbyJobPin = buttonNumber;
+    _standbyJobPressStartedAt = millis();
+    _standbyJobLongPressHandled = false;
     return;
   }
 
@@ -2224,6 +2456,7 @@ void AppController::confirmSetOrigin(UiState returnState) {
       _lastM211Request = millis();
       _lastMarlinStatusPoll = _lastM211Request;
     }
+    _originConfigured = true;
   }
 
   _posX = 0.0f;
@@ -2286,6 +2519,10 @@ void AppController::processSelectAction() {
     }
 
     if (choice == "Select Job") {
+      if (_job.isActive()) {
+        showJobControlMessage("Pause/Stop job dulu");
+        return;
+      }
       if (!_sdCard.isReady()) {
         if (AppConfig::ENABLE_BUZZER_NOTIFICATION) {
           _buzzer.play(BuzzerHandler::Cue::Warning);
@@ -2324,6 +2561,10 @@ void AppController::processSelectAction() {
     }
 
     if (choice == "Home All (G28)") {
+      if (_job.isActive()) {
+        showJobControlMessage("Job sedang aktif");
+        return;
+      }
       showActionConfirm(
         PendingAction::HomeAll,
         "CONFIRM HOME",
@@ -2333,6 +2574,10 @@ void AppController::processSelectAction() {
     }
 
     if (choice == "Set Origin (G92)") {
+      if (_job.isActive()) {
+        showJobControlMessage("Job sedang aktif");
+        return;
+      }
       enterSetOrigin();
       return;
     }
@@ -2370,7 +2615,7 @@ void AppController::processSelectAction() {
     }
 
     if (choice == "IP Address") {
-      String ip = _wifi.isConnected() ? WiFi.localIP().toString() : "Belum terhubung";
+      String ip = _wifi.isConnected() ? WiFi.localIP().toString() : "Wifi Belum terhubung";
       showInfoScreen("IP ADDRESS", ip.c_str());
       return;
     }
@@ -2601,6 +2846,11 @@ void AppController::onEncoderPressed() {
 // Selecting a file changes internal state _selectedJobSource and returns
 // user feedback on the LCD.
 bool AppController::selectFileFromList() {
+  if (_job.isActive()) {
+    showJobControlMessage("Stop job lebih dulu");
+    return false;
+  }
+
   if (_fileListSelected >= _fileListPaths.size()) {
     showInfoScreen(
       "File",
@@ -2625,10 +2875,21 @@ bool AppController::selectFileFromList() {
 
   if (_sdCard.selectJobFile(path.c_str())) {
     _selectedJobSource = JobSource::SdCard;
+    _homeCycleIssued = false;
+    _originConfigured = false;
+    if (!_job.prepare(_sdCard, path)) {
+      showInfoScreen(
+        "ANALISIS JOB",
+        _job.errorMessage().c_str(),
+        UiState::FileList,
+        AppConfig::CONFIRM_RESULT_MESSAGE_MS
+      );
+      return false;
+    }
     showInfoScreen(
       "SD Card",
-      "File dipilih",
-      UiState::FileList,
+      "Tahan X+ = Start",
+      UiState::Standby,
       AppConfig::CONFIRM_RESULT_MESSAGE_MS
     );
     return true;
@@ -2652,8 +2913,11 @@ bool AppController::selectSdCardJobFile(const char *path) {
 
   bool ok = _sdCard.selectJobFile(path);
   if (ok) {
-    _lcd.showMessage("SD Card", "File dipilih");
     _selectedJobSource = JobSource::SdCard;
+    _homeCycleIssued = false;
+    _originConfigured = false;
+    ok = _job.prepare(_sdCard, path);
+    _lcd.showMessage("SD Card", ok ? "File dipilih" : _job.errorMessage().c_str());
   } else {
     _lcd.showMessage("SD Card", "Pilih gagal");
   }
@@ -2733,6 +2997,8 @@ void AppController::beginMarlinConnection() {
   _lastMarlinResponseMs = 0;
   _marlinMonitorStartedAt = 0;
   _lastM114Request = 0;
+  _homeCycleIssued = false;
+  _originConfigured = false;
   Serial.println("[CNC] Komunikasi Marlin aktif");
 }
 

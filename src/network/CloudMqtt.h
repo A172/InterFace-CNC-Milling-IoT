@@ -17,6 +17,9 @@ struct MqttMonitoringSnapshot {
   String homeY;
   String homeZ;
   String softEndstop;
+  String jobFile = "Tidak tersedia";
+  String jobState = "IDLE";
+  String jobError;
   String positionSource = "unavailable";
   float posX = 0.0f;
   float posY = 0.0f;

@@ -18,9 +18,14 @@ Firmware **AYB Interface** pada ESP32-S3 DevKitM-1 sudah memiliki UI LCD, input 
 - Standby screen menampilkan waktu, koordinat X/Y/Z, job aktif, estimasi, dan status Marlin.
 - Koordinat standby menggunakan `?` sampai posisi nyata diterima dari `M114`.
 - Standby screen menampilkan `WiFi:[OK]/WiFi:[X]` dan `MQTT:[OK]/MQTT:[X]` pada satu baris khusus menggunakan font koordinat `6x10`.
+- Garis horizontal pada standby memisahkan status WiFi/MQTT dari nama job ketika file sudah dipilih.
 - Dialog konfirmasi memiliki aturan tetap: Enter = Yes, Back = No, rotary memilih dan mengeksekusi pilihan.
 - SD card browser dengan pemilihan file job.
 - Select Job langsung membuka SD card, menampilkan label/path, dan mengurutkan folder sebelum file.
+- G-code sender file SD mengirim satu command dan menunggu respons `ok` Marlin sebelum melanjutkan.
+- Analisis G-code non-blocking menghitung estimasi `HH:MM:SS` untuk G0/G1/G2/G3/G4.
+- Tombol standby `X+/PLAY`, `X-/PAUSE`, dan `Z-/STOP` mengendalikan job dengan long-press pada Start/Stop.
+- Preflight Start memeriksa file SD, koneksi Marlin, Home All, Set Origin, dan soft endstop.
 - Menu Set Origin dengan jog X/Y/Z, `G92 X0 Y0 Z0`, dan opsi soft endstop `M211 S1`.
 - Menu Machine Ctrl&Status untuk spindle, feedrate, area kerja, soft endstop, dan sensor homing.
 - Urutan Machine Ctrl&Status memprioritaskan status CNC, sensor home, dan soft endstop sebelum spindle serta parameter gerak.
@@ -29,7 +34,9 @@ Firmware **AYB Interface** pada ESP32-S3 DevKitM-1 sudah memiliki UI LCD, input 
 - WiFiManager untuk WiFi dan parameter MQTT.
 - MQTT lokal memakai PubSubClient dengan konfigurasi terpisah di `src/config/MqttConfig.h`.
 - Publish topic `cnc/status`, `cnc/progress`, `cnc/error`, dan `cnc/position`.
-- Publish retained `cnc/machine` berisi state CNC, spindle, soft endstop, feedrate, dan sensor home.
+- Publish retained `cnc/machine` berisi state CNC, activity job, spindle, soft endstop, feedrate, dan sensor home.
+- `cnc/progress` berisi nama file job, progress command yang diakui Marlin, dan state proses dengan fallback aman `Tidak tersedia`, `0`, dan `IDLE`.
+- Placeholder data mesin yang belum tersedia menggunakan `UNKNOWN` dan nilai feedrate `null` tanpa membuat data Marlin palsu.
 - `cnc/position` membawa field `valid`, `source`, serta display `?` ketika posisi belum tersedia.
 - Jalur simulasi posisi MQTT tersedia tetapi default dinonaktifkan agar tidak menghasilkan data dummy permanen.
 - Subscribe topic `cnc/command` dan `cnc/gcode` dalam mode receive-only ke Serial Monitor.
@@ -46,18 +53,22 @@ Firmware **AYB Interface** pada ESP32-S3 DevKitM-1 sudah memiliki UI LCD, input 
 
 - Validasi runtime komunikasi Marlin pada hardware SKR V1.4 Turbo.
 - Validasi payload `cnc/machine` dan transisi validitas `cnc/position` melalui MQTT Explorer.
+- Validasi seluruh pemetaan payload MQTT pada Node-RED Dashboard 2.0.
 - Validasi pergantian halaman serta tombol keluar layar About pada LCD/input hardware.
 - Validasi transisi status `WAIT`, `DISCONNECTED`, `CONNECTED`, `LOST`, dan `ERROR` pada hardware nyata.
 - Penyempurnaan machine status berbasis data nyata firmware Marlin.
 - Pemanfaatan posisi Marlin untuk workflow job yang lebih lengkap.
+- Validasi G-code sender, controlled pause/stop, progress, serta estimasi pada hardware nyata.
 - Perancangan validasi dan izin eksekusi command/G-code MQTT yang aman.
 
 ## Daftar Bug yang Masih Ada
 
 - Broker Mosquitto memakai IP laptop; koneksi akan gagal jika DHCP mengubah alamat laptop dan konfigurasi belum diperbarui.
 - Selama portal WiFiManager aktif, loop UI menunggu proses konfigurasi atau timeout portal.
-- Full G-code sender/job controller belum tersedia.
-- Progress job masih belum berasal dari eksekusi G-code nyata.
+- G-code sender belum diuji pada SKR/Marlin dan sistem gerak nyata.
+- Pause/Stop memakai barrier `M400` dan bukan emergency stop.
+- Estimasi belum memperhitungkan akselerasi, pergantian tool, dan waktu spindle mencapai RPM.
+- Flag Home/Origin preflight masih berdasarkan command yang dikirim interface, belum bukti independen dari Marlin.
 - Payload `cnc/command` baru dicetak ke Serial dan belum dieksekusi.
 - Payload `cnc/gcode` baru dicetak ke Serial dan belum dikirim ke Marlin atau SD card.
 - Upload file G-code lengkap lewat MQTT belum tersedia.
@@ -76,8 +87,12 @@ Firmware **AYB Interface** pada ESP32-S3 DevKitM-1 sudah memiliki UI LCD, input 
 - Uji koneksi yang terputus setelah pernah aktif dan verifikasi `cnc/alarm` berubah ke `ERROR`.
 - Uji alarm kembali ke `INFO` setelah Marlin merespons lagi.
 - Uji passive buzzer GPIO 38 dan pastikan rangkaian driver sesuai arus buzzer.
-- Lanjutkan desain G-code sender/job controller dari file SD card.
-- Tentukan format progress job dan estimasi waktu berbasis eksekusi nyata.
+- Uji sender terlebih dahulu tanpa tool dan benda kerja menggunakan file G-code pendek.
+- Verifikasi sender tidak mengirim command berikutnya sebelum respons `ok`.
+- Uji Start, Pause, Resume, controlled Stop, completion, timeout, dan repeat job.
+- Bandingkan estimasi dengan durasi nyata untuk menentukan faktor koreksi mesin.
+- Uji field `file`, `progress`, dan `state` pada `cnc/progress` setelah memilih file SD card.
+- Verifikasi tujuh kelompok dashboard Node-RED terhadap field MQTT yang didokumentasikan.
 - Jaga README, PROJECT_STATUS, dan CHANGELOG tetap sinkron setiap ada perubahan fitur/workflow.
 - Lengkapi dokumentasi wiring/pinout jika hardware final sudah dikunci.
 - Tentukan whitelist command MQTT dan workflow konfirmasi sebelum eksekusi mesin diaktifkan.
